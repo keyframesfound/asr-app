@@ -1,0 +1,10 @@
+.env
+.env.*
+google_token.json
+.venv/
+__pycache__/
+*.pyc
+uploads/
+transcripts/
+gui-test-screenshots/
+.DS_Store

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lesson Transcriber</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>Lesson Transcriber</h1>
+      <p class="sub">Upload a lesson recording → transcription runs locally on this Mac → AI summary &amp; Google Form quiz below.</p>
+    </header>
+
+    <section class="card">
+      <div id="dropZone">
+        <div class="drop-icon">🎧</div>
+        <p class="drop-line"><strong>Drop an audio file here</strong> or <label for="fileInput" class="linklike">browse</label></p>
+        <p class="hint">MP3 · WAV · M4A · AAC · OGG · FLAC · MP4</p>
+        <input type="file" id="fileInput" accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.mp4,audio/*" hidden>
+      </div>
+
+      <div class="options">
+        <label>Lesson audio
+          <select id="audioLang">
+            <option value="auto">Auto-detect</option>
+            <option value="yue">Cantonese 粵語</option>
+            <option value="zh">Mandarin 普通話</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <label>Summary &amp; quiz language
+          <select id="outLang">
+            <option value="zh-HK">繁體中文（香港）</option>
+            <option value="zh-CN">简体中文</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <label>Quiz length
+          <select id="quizCount">
+            <option value="5">5 questions</option>
+            <option value="10" selected>10 questions</option>
+            <option value="15">15 questions</option>
+          </select>
+        </label>
+      </div>
+
+      <div id="progressWrap" hidden>
+        <div class="progress-row">
+          <span id="stageText">Uploading…</span>
+          <span class="progress-meta"><span id="elapsedText"></span><span id="pctText">…</span></span>
+        </div>
+        <div class="bar" id="barTrack"><div id="barFill"></div></div>
+      </div>
+      <p id="errorText" class="error" hidden></p>
+    </section>
+
+    <section id="resultSection" class="stack" hidden>
+      <div class="card">
+        <div class="section-head">
+          <h2>Transcript</h2>
+          <div class="head-actions">
+            <button id="docxTranscript" class="btn ghost" type="button">⬇ Word</button>
+            <button id="copyTranscript" class="btn ghost" type="button">Copy transcript</button>
+          </div>
+        </div>
+        <div id="transcript" class="transcript"></div>
+      </div>
+
+      <div class="card actions">
+        <button id="btnSummary" class="btn primary" type="button">✨ AI Summary</button>
+        <button id="btnQuiz" class="btn primary" type="button">📝 Generate Google Form Quiz</button>
+      </div>
+
+      <div id="summaryCard" class="card" hidden>
+        <div class="section-head">
+          <h2>AI Summary</h2>
+          <div class="head-actions">
+            <button id="docxSummary" class="btn ghost" type="button">⬇ Word</button>
+            <button id="copySummary" class="btn ghost" type="button">Copy</button>
+          </div>
+        </div>
+        <div id="summary" class="summary"></div>
+      </div>
+
+      <div id="quizCard" class="card" hidden>
+        <div class="section-head">
+          <h2>Google Form Quiz</h2>
+          <div id="quizActions" class="head-actions" hidden>
+            <a id="quizEditLink" class="btn ghost" href="#" target="_blank" rel="noopener">✏️ Edit form</a>
+            <a id="quizOpenLink" class="btn primary" href="#" target="_blank" rel="noopener">📋 Open quiz form</a>
+            <button id="copyQuizLink" class="btn ghost" type="button">Copy student link</button>
+          </div>
+        </div>
+        <p id="quizStatus" class="hint"></p>
+        <button id="quizRetry" class="btn ghost" type="button" hidden>Retry</button>
+      </div>
+    </section>
+
+    <footer class="hint">
+      Transcription: audio never leaves this Mac (SenseVoice runs locally, on Metal). Summaries &amp; quizzes: transcript text is sent to OpenRouter.
+    </footer>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
