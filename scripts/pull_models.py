@@ -11,7 +11,7 @@ def main() -> int:
     try:
         from funasr import AutoModel
     except ImportError:
-        print("funasr is not installed. Run: pip install -r requirements.txt")
+        print("funasr is not installed. Run: pip install -r asr-service/requirements.txt")
         return 1
 
     import os

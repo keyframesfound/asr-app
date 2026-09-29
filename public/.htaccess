@@ -1,0 +1,11 @@
+# Lesson Transcriber (PHP) — Apache config.
+# Point the virtual host's DocumentRoot at this public/ folder; mod_rewrite
+# sends every non-file request to the front controller.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # Real files (the static assets) are served directly.
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+  RewriteRule ^ index.php [L]
+</IfModule>

@@ -1,0 +1,11 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+python-dotenv>=1.0
+funasr>=1.1.14
+funasr-onnx>=0.4.3
+onnx>=1.16,<2
+onnxscript>=0.7
+torch>=2.2
+torchaudio>=2.2
+numpy<2
