@@ -71,9 +71,20 @@ final class AppState: ObservableObject {
     @Published var globalError: String?
     /// The AI loading overlay (sign-in wait + summary/quiz generation).
     @Published var aiOverlay: AIOverlayState?
+    /// Sidebar-footer indicator: the speech model's current load stage, or nil
+    /// when nothing is loading. First launch after an install compiles the
+    /// encoder for the Neural Engine, which can take a couple of minutes —
+    /// this keeps that visible instead of silent.
+    @Published var modelWarmupStage: String?
 
     private var pendingAIAction: PendingAIAction?
     private var activeAITask: Task<Void, Never>?
+    /// The pending "release the model after idle" task; cancelled whenever a
+    /// new transcription starts so a fresh load is never yanked back out.
+    private var modelUnloadTask: Task<Void, Never>?
+
+    /// How long a loaded speech model stays resident after a job settles.
+    private static let modelIdleUnloadInterval: TimeInterval = 600
 
     let settings: SettingsStore
     let googleAuth = GoogleAuthStore()
@@ -99,13 +110,30 @@ final class AppState: ObservableObject {
     }
 
     /// Load the speech model in the background right at launch, so the first
-    /// transcription doesn't wait for it. Silent: failures are non-fatal —
-    /// transcription calls loadModels again and reports properly then.
+    /// transcription doesn't wait for it. Progress feeds the sidebar footer
+    /// (a cold Neural Engine compile can take a couple of minutes). Failures
+    /// are non-fatal — transcription calls loadModels again and reports
+    /// properly then.
     func prewarmModel() {
         let engine = self.engine
         let precision = currentPrecision
+        modelWarmupStage = "Warming up speech model…"
         Task.detached(priority: .userInitiated) {
-            try? await engine.loadModels(precision: precision, onProgress: { _ in })
+            defer { Task { @MainActor in self.modelWarmupStage = nil } }
+            _ = try? await engine.loadModels(precision: precision) { update in
+                Task { @MainActor in self.modelWarmupStage = update.stage }
+            }
+        }
+    }
+
+    /// Ten minutes after a job settles, release the loaded model so an idle
+    /// app holds no encoder memory; the next transcription loads it again.
+    private func scheduleModelUnload() {
+        modelUnloadTask?.cancel()
+        modelUnloadTask = Task { [engine] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.modelIdleUnloadInterval * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            engine.unloadModels()
         }
     }
 
@@ -131,6 +159,9 @@ final class AppState: ObservableObject {
     }
 
     func startTranscription(for lesson: Lesson) {
+        // A pending idle-unload must not fire while this job is loading/running.
+        modelUnloadTask?.cancel()
+        modelUnloadTask = nil
         let job = JobState()
         self.job = job
         jobLessonID = lesson.id
@@ -149,7 +180,11 @@ final class AppState: ObservableObject {
         }
 
         Task {
-            defer { progressTimer.invalidate() }
+            defer {
+                progressTimer.invalidate()
+                // Success or error, the model can wind down after the job.
+                scheduleModelUnload()
+            }
             do {
                 let segments = try await engine.transcribe(
                     url: audioURL,

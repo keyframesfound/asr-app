@@ -35,6 +35,11 @@ public final class TranscriptionEngine: @unchecked Sendable {
     /// Loads currently running, per precision — the launch prewarm and a
     /// first transcription can overlap, and both must share one load.
     private var inflightLoads: [SenseVoiceEncoderPrecision: Task<SenseVoiceModels, Error>] = [:]
+    /// Every active loadModels caller watches progress — the launch prewarm
+    /// and a transcription joining its load must both see the stages.
+    private var progressHandlers: [SenseVoiceEncoderPrecision: [(id: Int, handler: @Sendable (StageUpdate) -> Void)]] = [:]
+    private var lastStageUpdate: [SenseVoiceEncoderPrecision: StageUpdate] = [:]
+    private var nextHandlerID = 0
 
     /// VAD segments are merged into chunks of at most this length (sidecar: MAX_CHUNK_MS).
     private static let maxChunkSeconds = 25.0
@@ -47,13 +52,23 @@ public final class TranscriptionEngine: @unchecked Sendable {
 
     /// Load (downloading on first use) the SenseVoice models. Downloads report
     /// progress; loads are cached for the process lifetime. Concurrent calls
-    /// for the same precision join a single in-flight load.
+    /// for the same precision join a single in-flight load, and every caller
+    /// — the first one and the joiners alike — receives the load's stage
+    /// updates on its own `onProgress`.
     public func loadModels(
         precision: EncoderPrecision,
         onProgress: @escaping @Sendable (StageUpdate) -> Void
     ) async throws -> SenseVoiceModels {
         let coreMLPrecision: SenseVoiceEncoderPrecision = precision == .int8 ? .int8 : .fp16
         if let cached = cachedModels(coreMLPrecision) { return cached }
+
+        let handlerID = registerProgressHandler(coreMLPrecision, onProgress)
+        defer { removeProgressHandler(coreMLPrecision, id: handlerID) }
+        // Bring a joiner up to speed with wherever the in-flight load is.
+        lock.lock()
+        let replayed = lastStageUpdate[coreMLPrecision]
+        lock.unlock()
+        if let replayed { onProgress(replayed) }
 
         let task: Task<SenseVoiceModels, Error> = {
             lock.lock()
@@ -63,7 +78,7 @@ public final class TranscriptionEngine: @unchecked Sendable {
                 // Always clear, success or failure, so the next attempt can
                 // start fresh; the entry is gone by the time callers re-check.
                 defer { clearInflight(coreMLPrecision) }
-                return try await performLoad(precision: coreMLPrecision, onProgress: onProgress)
+                return try await performLoad(precision: coreMLPrecision)
             }
             inflightLoads[coreMLPrecision] = task
             return task
@@ -71,20 +86,62 @@ public final class TranscriptionEngine: @unchecked Sendable {
         return try await task.value
     }
 
+    /// Release the loaded models and per-language managers. The idle-unload
+    /// policy in AppState calls this so an idle app holds no model memory;
+    /// the next transcription simply loads again (fast once the system's
+    /// Neural Engine compile cache is warm).
+    public func unloadModels() {
+        lock.lock()
+        defer { lock.unlock() }
+        models = nil
+        managers = [:]
+        loadedPrecision = nil
+    }
+
+    private func registerProgressHandler(
+        _ precision: SenseVoiceEncoderPrecision,
+        _ handler: @escaping @Sendable (StageUpdate) -> Void
+    ) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let id = nextHandlerID
+        nextHandlerID += 1
+        progressHandlers[precision, default: []].append((id, handler))
+        return id
+    }
+
+    private func removeProgressHandler(_ precision: SenseVoiceEncoderPrecision, id: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        progressHandlers[precision]?.removeAll { $0.id == id }
+    }
+
+    /// Fan a stage update out to every watcher of this precision, and remember
+    /// it so callers joining mid-load can be replayed up to date.
+    private func broadcastProgress(_ update: StageUpdate, precision: SenseVoiceEncoderPrecision) {
+        lock.lock()
+        lastStageUpdate[precision] = update
+        let handlers = progressHandlers[precision] ?? []
+        lock.unlock()
+        for (_, handler) in handlers { handler(update) }
+    }
+
     private func clearInflight(_ precision: SenseVoiceEncoderPrecision) {
         lock.lock()
         defer { lock.unlock() }
         inflightLoads[precision] = nil
+        // The load is over — a stale replay would mislead the next one.
+        lastStageUpdate[precision] = nil
     }
 
     /// The actual load: bundled fast path first (release builds ship the model
     /// inside the bundle — no first-run download, no cache copy), then the hub
     /// path, which fetches into the user cache.
     private func performLoad(
-        precision coreMLPrecision: SenseVoiceEncoderPrecision,
-        onProgress: @escaping @Sendable (StageUpdate) -> Void
+        precision coreMLPrecision: SenseVoiceEncoderPrecision
     ) async throws -> SenseVoiceModels {
-        onProgress(StageUpdate(stage: "Loading speech model…", progress: 5))
+        broadcastProgress(StageUpdate(stage: "Loading speech model…", progress: 5),
+                          precision: coreMLPrecision)
 
         if let bundled = Self.bundledModelDirectory("sensevoice-small-coreml"),
            SenseVoiceModels.modelsExist(at: bundled, precision: coreMLPrecision) {
@@ -106,7 +163,8 @@ public final class TranscriptionEngine: @unchecked Sendable {
             case .compiling(let name): phase = "Preparing model (\(name))…"
             case .downloading(let done, let total): phase = "Downloading speech model… \(done)/\(total)"
             }
-            onProgress(StageUpdate(stage: phase, progress: percent))
+            self.broadcastProgress(StageUpdate(stage: phase, progress: percent),
+                                   precision: coreMLPrecision)
         }
 
         storeModels(loaded, precision: coreMLPrecision)
