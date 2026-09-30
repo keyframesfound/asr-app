@@ -93,6 +93,22 @@ final class AppState: ObservableObject {
 
     // MARK: - Import + transcription
 
+    /// Encoder precision as chosen in Settings (default fp16).
+    private var currentPrecision: EncoderPrecision {
+        EncoderPrecision(rawValue: UserDefaults.standard.string(forKey: "asr.precision") ?? "") ?? .fp16
+    }
+
+    /// Load the speech model in the background right at launch, so the first
+    /// transcription doesn't wait for it. Silent: failures are non-fatal —
+    /// transcription calls loadModels again and reports properly then.
+    func prewarmModel() {
+        let engine = self.engine
+        let precision = currentPrecision
+        Task.detached(priority: .userInitiated) {
+            try? await engine.loadModels(precision: precision, onProgress: { _ in })
+        }
+    }
+
     func importAndTranscribe(url: URL, audioLanguage: AudioLanguage, outputLanguage: OutputLanguage) {
         let filename = url.lastPathComponent
         let ext = (filename as NSString).pathExtension.lowercased()
@@ -123,7 +139,7 @@ final class AppState: ObservableObject {
         quizErrors[lesson.id] = nil
         summaryErrors[lesson.id] = nil
         let audioURL = store.audioURL(for: lesson)
-        let precision = EncoderPrecision(rawValue: UserDefaults.standard.string(forKey: "asr.precision") ?? "") ?? .fp16
+        let precision = currentPrecision
 
         job.startedAt = Date()
         job.stage = "Starting…"

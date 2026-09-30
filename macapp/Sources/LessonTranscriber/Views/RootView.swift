@@ -7,6 +7,7 @@ import LessonKit
 struct RootView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var updater: AppUpdater
+    @Environment(\.openWindow) private var openWindow
     @State private var renamingLesson: Lesson?
     @State private var searchText = ""
 
@@ -85,6 +86,14 @@ struct RootView: View {
             }
         }
         .task { await updater.startupCheckIfNeeded() }
+        // Speech model warms up while the user looks around; a first
+        // transcription that races it simply joins the same load.
+        .task { state.prewarmModel() }
+        // Dock-icon click after the window was closed — the app delegate
+        // asks for the main window back.
+        .onReceive(NotificationCenter.default.publisher(for: .reopenMainWindow)) { _ in
+            openWindow(id: "main")
+        }
     }
 
     /// Lessons filtered by the sidebar search field (display-name match).
@@ -277,8 +286,14 @@ struct RenameSheet: View {
 
 /// Blends the system title bar into the content: transparent title bar,
 /// full-size content view, no title text, background dragging — so the
-/// near-black panes run edge to edge and the traffic lights float.
+/// near-black panes run edge to edge and the traffic lights float. Also
+/// adds the launch fade-in and the double-click-the-top-strip behaviour of
+/// a normal Mac title bar.
 struct WindowMover: NSViewRepresentable {
+    /// Height of the strip at the top of the window that acts like a title
+    /// bar for double-clicks (the traffic lights float within its top ~28pt).
+    static let titleBarStripHeight: CGFloat = 40
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async { Self.configure(view.window) }
@@ -298,5 +313,59 @@ struct WindowMover: NSViewRepresentable {
         // The area reserved for the (hidden) toolbar shows the window
         // background — paint it the same black as the panes.
         window.backgroundColor = NSColor(red: 0x10/255.0, green: 0x10/255.0, blue: 0x10/255.0, alpha: 1)
+        fadeInOnce(window)
+        installDoubleClickTitleBar(on: window)
+    }
+
+    /// Launch fade-in: the window eases in from invisible, like a native
+    /// app's gentle entrance. Once per process — dock reopens don't re-fade.
+    private static var didFadeIn = false
+    private static func fadeInOnce(_ window: NSWindow) {
+        guard !didFadeIn else { return }
+        didFadeIn = true
+        window.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().alphaValue = 1
+        }
+    }
+
+    /// A transparent title bar swallows AppKit's own double-click-titlebar
+    /// handling, so recreate it: a double click in the top strip behaves like
+    /// on any Mac app, honouring the system "Double-click a window's title
+    /// bar" setting. Single clicks and drags are never delayed.
+    private static func installDoubleClickTitleBar(on window: NSWindow) {
+        guard let content = window.contentView else { return }
+        guard !content.gestureRecognizers.contains(where: { $0 is NSClickGestureRecognizer }) else { return }
+        let recognizer = NSClickGestureRecognizer(
+            target: TitleBarDoubleClickHandler.shared,
+            action: #selector(TitleBarDoubleClickHandler.doubleClicked(_:)))
+        recognizer.numberOfClicksRequired = 2
+        recognizer.delaysPrimaryMouseButtonEvents = false
+        content.addGestureRecognizer(recognizer)
+    }
+}
+
+/// Selector target for the title-bar double-click gesture (gesture targets
+/// must be objects; WindowMover is a struct).
+final class TitleBarDoubleClickHandler: NSObject {
+    static let shared = TitleBarDoubleClickHandler()
+
+    @objc func doubleClicked(_ recognizer: NSClickGestureRecognizer) {
+        guard let window = recognizer.view?.window,
+              let content = window.contentView else { return }
+        let location = recognizer.location(in: content)
+        guard content.bounds.height - location.y <= WindowMover.titleBarStripHeight else { return }
+
+        // AppleActionOnDoubleClick: 1 = minimize, 3 = fill screen (native
+        // fullscreen), 0 = do nothing. Unset defaults to zoom — the long-time
+        // system behaviour (double-click again restores the old frame).
+        switch UserDefaults.standard.object(forKey: "AppleActionOnDoubleClick") as? Int {
+        case 1: window.miniaturize(recognizer)
+        case 3: window.toggleFullScreen(recognizer)
+        case 0: break
+        default: window.zoom(recognizer)
+        }
     }
 }

@@ -32,6 +32,9 @@ public final class TranscriptionEngine: @unchecked Sendable {
     private var models: SenseVoiceModels?
     private var managers: [AudioLanguage: SenseVoiceManager] = [:]
     private var loadedPrecision: SenseVoiceEncoderPrecision?
+    /// Loads currently running, per precision — the launch prewarm and a
+    /// first transcription can overlap, and both must share one load.
+    private var inflightLoads: [SenseVoiceEncoderPrecision: Task<SenseVoiceModels, Error>] = [:]
 
     /// VAD segments are merged into chunks of at most this length (sidecar: MAX_CHUNK_MS).
     private static let maxChunkSeconds = 25.0
@@ -43,7 +46,8 @@ public final class TranscriptionEngine: @unchecked Sendable {
     // MARK: - Model loading
 
     /// Load (downloading on first use) the SenseVoice models. Downloads report
-    /// progress; loads are cached for the process lifetime.
+    /// progress; loads are cached for the process lifetime. Concurrent calls
+    /// for the same precision join a single in-flight load.
     public func loadModels(
         precision: EncoderPrecision,
         onProgress: @escaping @Sendable (StageUpdate) -> Void
@@ -51,18 +55,43 @@ public final class TranscriptionEngine: @unchecked Sendable {
         let coreMLPrecision: SenseVoiceEncoderPrecision = precision == .int8 ? .int8 : .fp16
         if let cached = cachedModels(coreMLPrecision) { return cached }
 
+        let task: Task<SenseVoiceModels, Error> = {
+            lock.lock()
+            defer { lock.unlock() }
+            if let existing = inflightLoads[coreMLPrecision] { return existing }
+            let task = Task<SenseVoiceModels, Error> {
+                // Always clear, success or failure, so the next attempt can
+                // start fresh; the entry is gone by the time callers re-check.
+                defer { clearInflight(coreMLPrecision) }
+                return try await performLoad(precision: coreMLPrecision, onProgress: onProgress)
+            }
+            inflightLoads[coreMLPrecision] = task
+            return task
+        }()
+        return try await task.value
+    }
+
+    private func clearInflight(_ precision: SenseVoiceEncoderPrecision) {
+        lock.lock()
+        defer { lock.unlock() }
+        inflightLoads[precision] = nil
+    }
+
+    /// The actual load: bundled fast path first (release builds ship the model
+    /// inside the bundle — no first-run download, no cache copy), then the hub
+    /// path, which fetches into the user cache.
+    private func performLoad(
+        precision coreMLPrecision: SenseVoiceEncoderPrecision,
+        onProgress: @escaping @Sendable (StageUpdate) -> Void
+    ) async throws -> SenseVoiceModels {
         onProgress(StageUpdate(stage: "Loading speech model…", progress: 5))
 
-        // Release builds ship the model inside the bundle: load straight
-        // from there — no first-run download, no cache copy. A corrupt or
-        // missing bundle falls through to the hub path below, which fetches
-        // into the user cache as before.
         if let bundled = Self.bundledModelDirectory("sensevoice-small-coreml"),
            SenseVoiceModels.modelsExist(at: bundled, precision: coreMLPrecision) {
-            let task = Task.detached(priority: .userInitiated) {
+            let loadTask = Task.detached(priority: .userInitiated) {
                 try SenseVoiceModels.load(from: bundled, precision: coreMLPrecision)
             }
-            if let loaded = try? await task.value {
+            if let loaded = try? await loadTask.value {
                 storeModels(loaded, precision: coreMLPrecision)
                 return loaded
             }

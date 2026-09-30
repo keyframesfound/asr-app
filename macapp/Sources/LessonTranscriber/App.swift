@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 import LessonKit
 
 @main
 struct LessonTranscriberApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var settings = SettingsStore()
     @StateObject private var state: AppState
     @StateObject private var updater = AppUpdater()
@@ -14,7 +16,8 @@ struct LessonTranscriberApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // id lets the app delegate's reopen path request this window back.
+        WindowGroup(id: "main") {
             RootView()
                 .environmentObject(settings)
                 .environmentObject(state)
@@ -33,4 +36,20 @@ struct LessonTranscriberApp: App {
             }
         }
     }
+}
+
+/// SwiftUI alone leaves the app windowless when the user closes the last
+/// window: clicking the dock icon does nothing. Recreate the main window the
+/// way a normal Mac app reopens.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            NotificationCenter.default.post(name: .reopenMainWindow, object: nil)
+        }
+        return true
+    }
+}
+
+extension Notification.Name {
+    static let reopenMainWindow = Notification.Name("LessonTranscriber.reopenMainWindow")
 }
