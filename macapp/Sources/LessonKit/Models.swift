@@ -93,8 +93,8 @@ public enum SummaryLength: String, Codable, CaseIterable, Identifiable {
 
     public var blurb: String {
         switch self {
-        case .brief: return "A quick overview — a few sentences and the essentials."
-        case .standard: return "The default: overview, key points, key terms, examples, follow-ups."
+        case .brief: return "A quick overview with a few sentences and essentials."
+        case .standard: return "The default: overview, key points, examples, follow-ups."
         case .inDepth: return "Fuller notes with more detail in every section."
         }
     }
