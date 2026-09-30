@@ -12,3 +12,8 @@ asr-service/transcripts/
 gui-test-screenshots/
 .DS_Store
 *.log
+macapp/.build/
+macapp/dist/
+macapp/AppIcon.iconset/
+
+.build/
