@@ -8,10 +8,13 @@ declare(strict_types=1);
  * Serves the UI and the same JSON API the old Python app exposed:
  *   POST /api/upload        save + forward audio to the SenseVoice sidecar
  *   GET  /api/jobs/{id}     mirrored transcription progress
- *   POST /api/summary       OpenRouter summary
- *   POST /api/quiz          OpenRouter quiz questions
- *   POST /api/forms         create a Google Form quiz (OAuth via popup)
+ *   POST /api/summary       OpenRouter summary            (needs Google sign-in)
+ *   POST /api/quiz          OpenRouter quiz questions     (needs Google sign-in)
+ *   POST /api/forms         create a Google Form quiz     (needs Google sign-in)
  *   POST /api/docx          Word download of transcript/summary
+ *   GET  /api/auth          sign-in status {configured, signed_in, email}
+ *   POST /api/auth          start a Google sign-in -> {auth_url, state}
+ *   POST /api/auth/signout  end the session's Google sign-in
  *   GET  /                  UI (or the Google OAuth callback when ?code/?error present)
  *   GET  /static/*          static assets
  */
@@ -52,16 +55,17 @@ if (str_starts_with($path, '/static/')) {
 /* ---------- UI / OAuth callback ---------- */
 
 if ($path === '/' && $method === 'GET') {
-    session_start(); // the OAuth state maps live in the PHP session
+    session_start(); // the OAuth state map and the Google token live in the session
     if (isset($_GET['code']) || isset($_GET['error'])) {
         header('Content-Type: text/html; charset=utf-8');
-        echo GForms::oauthCallbackHtml(
+        echo GForms::callbackHtml(GForms::handleCallback(
             strval($_GET['code'] ?? ''),
             strval($_GET['state'] ?? ''),
             strval($_GET['error'] ?? '')
-        );
+        ));
         exit;
     }
+    session_write_close();
     header('Content-Type: text/html; charset=utf-8');
     readfile(__DIR__ . '/static/index.html');
     exit;
@@ -82,7 +86,37 @@ if (preg_match('#^/api/jobs/([a-f0-9]{12})$#', $path, $m) === 1 && $method === '
     handle_job_status($m[1]);
 }
 
+if ($path === '/api/auth' && $method === 'GET') {
+    session_start();
+    $status = [
+        'configured' => GForms::isConfigured(),
+        'signed_in' => GForms::isSignedIn(),
+        'email' => GForms::signedInEmail(),
+    ];
+    session_write_close();
+    Api::json($status);
+}
+
+if ($path === '/api/auth' && $method === 'POST') {
+    session_start();
+    if (!GForms::isConfigured()) {
+        Api::error(400, 'Google sign-in is not set up yet: add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET '
+            . 'to .env (see README).');
+    }
+    $state = GForms::issueState();
+    session_write_close();
+    Api::json(['auth_url' => GForms::buildAuthUrl($state), 'state' => $state]);
+}
+
+if ($path === '/api/auth/signout' && $method === 'POST') {
+    session_start();
+    GForms::signOut();
+    session_write_close();
+    Api::json(['ok' => true]);
+}
+
 if ($path === '/api/summary' && $method === 'POST') {
+    require_google();
     $body = read_json_body();
     $transcript = strval($body['transcript'] ?? '');
     if (text_len(trim($transcript)) < 20) {
@@ -97,6 +131,7 @@ if ($path === '/api/summary' && $method === 'POST') {
 }
 
 if ($path === '/api/quiz' && $method === 'POST') {
+    require_google();
     $body = read_json_body();
     $transcript = strval($body['transcript'] ?? '');
     if (text_len(trim($transcript)) < 20) {
@@ -120,7 +155,34 @@ if ($path === '/api/quiz' && $method === 'POST') {
 
 if ($path === '/api/forms' && $method === 'POST') {
     session_start();
-    handle_forms(read_json_body());
+    if (!GForms::isSignedIn()) {
+        Api::error(401, 'Sign in with Google to use the AI features.');
+    }
+    $body = read_json_body();
+    $questions = is_array($body['questions'] ?? null) ? $body['questions'] : [];
+    if ($questions === []) {
+        Api::error(400, 'No quiz questions to send to Google Forms.');
+    }
+    // Renew the access token while the session is still open, so the refreshed
+    // token is persisted before the (long) Forms API calls release the lock.
+    try {
+        GForms::ensureFreshToken();
+    } catch (NotSignedInException) {
+        Api::error(401, 'Your Google session has expired — sign in again to continue.');
+    }
+    session_write_close();
+    try {
+        $created = GForms::createQuizForm(
+            strval($body['title'] ?? '') !== '' ? strval($body['title']) : 'Lesson Quiz',
+            strval($body['description'] ?? ''),
+            $questions
+        );
+    } catch (NotSignedInException) {
+        Api::error(401, 'Your Google session has expired — sign in again to continue.');
+    } catch (RuntimeException $exc) {
+        Api::error(400, $exc->getMessage());
+    }
+    Api::json($created + ['count' => count($questions)]);
 }
 
 if ($path === '/api/docx' && $method === 'POST') {
@@ -185,42 +247,6 @@ function handle_job_status(string $jobId): void
 }
 
 /** @param array<string, mixed> $body */
-function handle_forms(array $body): void
-{
-    if (!GForms::isConfigured()) {
-        Api::error(400, 'Google sign-in is not set up yet: add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET '
-            . 'to .env (see README).');
-    }
-    $questions = is_array($body['questions'] ?? null) ? $body['questions'] : [];
-    if ($questions === []) {
-        Api::error(400, 'No quiz questions to send to Google Forms.');
-    }
-    // Every quiz needs its own sign-in: without a just-completed sign-in proof,
-    // throw away any cached token and start a fresh OAuth round-trip.
-    $challenge = function (): void {
-        $state = GForms::issueState();
-        Api::json(['auth_url' => GForms::buildAuthUrl($state), 'auth_state' => $state], 401);
-    };
-    if (!GForms::claimFreshSignin(strval($body['auth_state'] ?? ''))) {
-        GForms::forgetToken();
-        $challenge();
-    }
-    try {
-        $created = GForms::createQuizForm(
-            strval($body['title'] ?? '') !== '' ? strval($body['title']) : 'Lesson Quiz',
-            strval($body['description'] ?? ''),
-            $questions
-        );
-    } catch (NotSignedInException) {
-        $challenge();
-    } catch (RuntimeException $exc) {
-        Api::error(400, $exc->getMessage());
-    }
-    GForms::forgetToken(); // the next quiz must sign in again
-    Api::json($created + ['count' => count($questions)]);
-}
-
-/** @param array<string, mixed> $body */
 function handle_docx(array $body): void
 {
     $kind = strval($body['kind'] ?? '');
@@ -251,6 +277,17 @@ function handle_docx(array $body): void
 }
 
 /* ---------- helpers ---------- */
+
+/** Gate for every AI endpoint: a Google sign-in must exist in the session.
+ * Closes the session afterwards so long LLM calls never block the OAuth popup. */
+function require_google(): void
+{
+    session_start();
+    if (!GForms::isSignedIn()) {
+        Api::error(401, 'Sign in with Google to use the AI features.');
+    }
+    session_write_close();
+}
 
 function serve_static(string $requested): void
 {

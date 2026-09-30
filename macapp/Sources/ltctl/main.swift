@@ -4,6 +4,8 @@ import LessonKit
 /// Dev CLI for headless verification of the LessonKit pipeline:
 ///   ltctl transcribe <file> [--lang auto|yue|zh|en] [--precision fp16|int8]
 ///   ltctl docx <kind transcript|summary> <file.md-or-txt> --title <t> -o out.docx
+///   ltctl fetch-models <out-dir> [--precision fp16|int8] [--force]
+///                               (stage speech models for bundling)
 ///   ltctl merge-test            (unit-check the chunk merging)
 let args = Array(CommandLine.arguments.dropFirst())
 let command = args.first ?? ""
@@ -110,6 +112,22 @@ case "import":
     try store.save(lesson)
     print("imported lesson \(lesson.id): \(name), \(segments.count) segments")
 
+case "fetch-models":
+    // Stage speech models for bundling (Scripts/fetch_model.sh wraps this):
+    // uses the local FluidAudio cache, downloads whatever is missing.
+    let outDir = URL(fileURLWithPath: args.dropFirst().first ?? "Resources/FluidAudio")
+    let stagePrecision = EncoderPrecision(rawValue: flag("--precision") ?? "fp16") ?? .fp16
+    Task {
+        do {
+            try await ModelStaging.stage(
+                to: outDir, precision: stagePrecision, force: args.contains("--force"))
+            semaphore.signal()
+        } catch {
+            fail(String(describing: error))
+        }
+    }
+    semaphore.wait()
+
 case "merge-test":
     let chunks = TranscriptionEngine.mergeChunks([
         (0.0, 10.0), (10.2, 20.0), (19.0, 44.0), (60.0, 80.0), (80.5, 90.0), (200.0, 210.0),
@@ -118,5 +136,5 @@ case "merge-test":
     print("crc32(\"hello\") = \(String(format: "%08x", ZipWriter.crc32(Data("hello".utf8))))")
 
 default:
-    fail("unknown command '\(command)' — try transcribe / docx / merge-test")
+    fail("unknown command '\(command)' — try transcribe / fetch-models / docx / merge-test")
 }

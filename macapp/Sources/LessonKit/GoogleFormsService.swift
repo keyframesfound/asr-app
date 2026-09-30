@@ -57,6 +57,9 @@ public struct GoogleFormsService: Sendable {
     /// One full sign-in round-trip. Opens Google's consent page in the default
     /// browser and awaits the loopback redirect. Returns the exchanged token.
     public func signIn() async throws -> Token {
+        // Tear down any stale listener from an abandoned attempt so the
+        // loopback port is free for this round-trip.
+        OAuthLoopbackListener.cancelActive()
         let state = UUID().uuidString
         var components = URLComponents(string: Self.authURL)!
         components.queryItems = [
@@ -109,6 +112,13 @@ public struct GoogleFormsService: Sendable {
             listener.stop()
             throw error
         }
+    }
+
+    /// Cancel any in-flight sign-in round-trip — the overlay's Cancel / Try
+    /// Again use this so a closed browser tab doesn't hold the port until the
+    /// 300 s timeout.
+    public static func cancelSignIn() {
+        OAuthLoopbackListener.cancelActive()
     }
 
     /// Exchange a fresh access token for a stored refresh token.
@@ -348,6 +358,15 @@ final class OAuthLoopbackListener: @unchecked Sendable {
     /// The start()-local single-resume closure, so fail(_:) reuses the same
     /// guard and the continuation can never be resumed twice.
     private var finishHandler: ((Result<GoogleFormsService.CallbackResult, Error>) -> Void)?
+    /// The listener waiting on the current sign-in round-trip, so a retry or
+    /// cancel can tear it down instead of waiting out the 300 s timeout.
+    private static var active: OAuthLoopbackListener?
+
+    /// Fail the in-flight round-trip (if any) immediately.
+    static func cancelActive() {
+        guard let listener = active else { return }
+        listener.finishHandler?(.failure(GoogleFormsService.FormsError("Sign-in cancelled.")))
+    }
 
     init(port: UInt16) {
         self.port = port
@@ -370,10 +389,14 @@ final class OAuthLoopbackListener: @unchecked Sendable {
                 finished = true
                 lock.unlock()
                 guard !alreadyDone else { return }
+                if OAuthLoopbackListener.active === self {
+                    OAuthLoopbackListener.active = nil
+                }
                 stop()
                 completion(result)
             }
             finishHandler = finish
+            OAuthLoopbackListener.active = self
 
             listener.newConnectionHandler = { [weak self] connection in
                 self?.connections.append(connection)

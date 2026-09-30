@@ -21,6 +21,31 @@ final class JobState: ObservableObject {
     }
 }
 
+/// An AI action queued behind the loading overlay (AI Summary / Google Form
+/// quiz). Everything AI runs only after a Google sign-in.
+enum PendingAIAction {
+    case summary(lessonID: String)
+    case quiz(lessonID: String, count: Int)
+}
+
+/// State of the AI-agent-style loading overlay — the Mac equivalent of the web
+/// app's #aiOverlay. Non-nil while a sign-in wait or a generation runs.
+struct AIOverlayState: Equatable {
+    enum Kind: Equatable { case summary, quiz }
+    enum Work: Equatable { case summary, quizQuestions, quizForm }
+    enum Phase: Equatable {
+        /// The browser is open, waiting for Google's consent round-trip.
+        case auth
+        /// Sign-in failed or was dismissed — Try Again reopens the browser.
+        case authFailed(String)
+        /// Generating; the view cycles the step text for this work type.
+        case working(Work)
+    }
+
+    var kind: Kind
+    var phase: Phase
+}
+
 /// App-wide state: the lesson list, the active transcription job, and the
 /// summary / quiz / export actions. Replaces public/index.php's API handlers.
 @MainActor
@@ -44,6 +69,11 @@ final class AppState: ObservableObject {
     @Published var quizStatuses: [String: String] = [:]
     @Published var quizErrors: [String: Bool] = [:]
     @Published var globalError: String?
+    /// The AI loading overlay (sign-in wait + summary/quiz generation).
+    @Published var aiOverlay: AIOverlayState?
+
+    private var pendingAIAction: PendingAIAction?
+    private var activeAITask: Task<Void, Never>?
 
     let settings: SettingsStore
     let googleAuth = GoogleAuthStore()
@@ -155,6 +185,84 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - AI gate + loading overlay
+
+    /// Entry point for the AI Summary / Generate Quiz buttons: every AI action
+    /// requires a Google sign-in first. Signed out, the overlay waits for the
+    /// browser consent and then resumes the tapped action automatically.
+    func beginAI(_ action: PendingAIAction) {
+        guard aiOverlay == nil, activeAITask == nil else { return }
+        pendingAIAction = action
+        if googleAuth.isSignedIn {
+            activeAITask = Task { await runPendingAI() }
+        } else {
+            startOverlaySignIn()
+        }
+    }
+
+    /// Try Again on the overlay: drop any stuck sign-in listener (a browser
+    /// tab closed before consenting never calls back) and reopen the browser —
+    /// the second chance.
+    func retryGoogleSignIn() {
+        guard pendingAIAction != nil else { return }
+        GoogleFormsService.cancelSignIn()
+        activeAITask?.cancel()
+        aiOverlay?.phase = .auth
+        activeAITask = Task { [weak self] in
+            await self?.awaitSignInThenRun()
+        }
+    }
+
+    /// Cancel on the overlay: stop the work (and any pending sign-in) quietly.
+    func cancelAI() {
+        GoogleFormsService.cancelSignIn()
+        activeAITask?.cancel()
+        activeAITask = nil
+        pendingAIAction = nil
+        aiOverlay = nil
+    }
+
+    private func startOverlaySignIn() {
+        aiOverlay = AIOverlayState(kind: overlayKind, phase: .auth)
+        activeAITask = Task { [weak self] in
+            await self?.awaitSignInThenRun()
+        }
+    }
+
+    private var overlayKind: AIOverlayState.Kind {
+        if case .quiz = pendingAIAction { return .quiz }
+        return .summary
+    }
+
+    private func awaitSignInThenRun() async {
+        do {
+            try await googleAuth.signIn()
+            guard !Task.isCancelled else { return }
+            await runPendingAI()
+        } catch {
+            guard !Task.isCancelled else { return }
+            aiOverlay?.phase = .authFailed(error.localizedDescription)
+        }
+    }
+
+    private func runPendingAI() async {
+        defer {
+            aiOverlay = nil
+            activeAITask = nil
+            pendingAIAction = nil
+        }
+        guard let action = pendingAIAction else { return }
+        switch action {
+        case .summary(let lessonID):
+            guard let lesson = lessons.first(where: { $0.id == lessonID }) else { return }
+            aiOverlay = AIOverlayState(kind: .summary, phase: .working(.summary))
+            await summarize(lesson)
+        case .quiz(let lessonID, let count):
+            guard let lesson = lessons.first(where: { $0.id == lessonID }) else { return }
+            await makeQuiz(lesson, count: count)
+        }
+    }
+
     // MARK: - AI summary (POST /api/summary equivalent)
 
     func summarize(_ lesson: Lesson) async {
@@ -173,6 +281,7 @@ final class AppState: ObservableObject {
                 transcript: transcript, lang: lesson.outputLanguage, length: settings.summaryLength)
             applySummary(lessonID: lesson.id, summary: summary)
         } catch {
+            if Task.isCancelled { return } // cancelled from the loading overlay
             summaryErrors[lesson.id] = error.localizedDescription
         }
     }
@@ -200,6 +309,7 @@ final class AppState: ObservableObject {
         quizBusyLessonID = lesson.id
         quizErrors[lesson.id] = false
         quizStatuses[lesson.id] = "Generating questions…"
+        aiOverlay?.phase = .working(.quizQuestions)
         defer { quizBusyLessonID = nil }
         do {
             let client = OpenRouterClient(apiKey: BundledConfig.openRouterKey,
@@ -216,6 +326,11 @@ final class AppState: ObservableObject {
             quizStatuses[lesson.id] = "Done — \(quiz.questions.count)-question quiz created in your Google Drive. "
                 + "Share the student link with your class."
         } catch {
+            if Task.isCancelled { // cancelled from the loading overlay
+                quizStatuses[lesson.id] = "Cancelled."
+                quizErrors[lesson.id] = false
+                return
+            }
             quizStatuses[lesson.id] = error.localizedDescription
             quizErrors[lesson.id] = true
         }
@@ -236,6 +351,7 @@ final class AppState: ObservableObject {
             ? "Creating the form in your Google Drive…"
             : "Sign in with Google to create the quiz — approve it in your browser…"
         try await googleAuth.ensureSignedIn()
+        aiOverlay?.phase = .working(.quizForm)
         let accessToken = try await googleAuth.validAccessToken()
         return try await service.createQuizForm(
             title: title, description: description, questions: questions, accessToken: accessToken)

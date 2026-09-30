@@ -137,7 +137,7 @@ struct LessonDetailView: View {
         Card {
             HStack(spacing: 12) {
                 Button {
-                    Task { await state.summarize(lesson) }
+                    state.beginAI(.summary(lessonID: lesson.id))
                 } label: {
                     Label("AI Summary", systemImage: "sparkles")
                 }
@@ -145,7 +145,7 @@ struct LessonDetailView: View {
                 .disabled(lesson.segments.count < 2 || state.summaryBusyLessonIDs.contains(lesson.id))
 
                 Button {
-                    Task { await state.makeQuiz(lesson, count: quizCount) }
+                    state.beginAI(.quiz(lessonID: lesson.id, count: quizCount))
                 } label: {
                     Label("Generate Google Form Quiz", systemImage: "list.clipboard")
                 }

@@ -15,5 +15,6 @@ gui-test-screenshots/
 macapp/.build/
 macapp/dist/
 macapp/AppIcon.iconset/
+macapp/Resources/FluidAudio/
 
 .build/

@@ -1,25 +1,29 @@
 <?php
 
-/** Google Forms API client — builds quiz forms directly in the teacher's Drive.
+/** Google sign-in + Forms API client — builds quiz forms in the teacher's Drive.
  *
- * Uses OAuth 2.0 with the forms.body scope. Every quiz demands its own fresh
- * Google sign-in: the browser visits Google's consent page in a popup, and the
- * exchanged token lives only long enough to create that one form before it is
- * discarded — so the next quiz has to sign in again.
+ * Sign-in is once per browser session: the browser visits Google's consent page
+ * in a popup, and the exchanged token (with its refresh token) lives in the PHP
+ * session until the teacher signs out or the browser session ends. Every AI
+ * endpoint checks GForms::isSignedIn() before it will run.
  *
  * Unlike the old Python app (one long-lived process), PHP is shared-nothing per
- * request, so the pending/completed OAuth states live in the PHP session.
- * session_start() must have been called before any method here runs.
+ * request, so the token and the pending OAuth states live in the PHP session.
+ * session_start() must have been called before any method here runs, and the
+ * session must still be open wherever a token may be written back (refresh).
  */
 final class GForms
 {
-    public const SCOPE = 'https://www.googleapis.com/auth/forms.body';
+    public const SCOPE = 'https://www.googleapis.com/auth/forms.body'
+        . ' https://www.googleapis.com/auth/userinfo.email'
+        . ' https://www.googleapis.com/auth/userinfo.profile';
 
     private const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
     private const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+    private const USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo';
     private const FORMS_API = 'https://forms.googleapis.com/v1';
     private const STATE_TTL = 600; // seconds a pending sign-in round-trip stays valid
-    private const FRESH_TTL = 300; // seconds a just-completed sign-in counts as proof for one form request
+    private const REFRESH_AHEAD = 300; // refresh the access token this many seconds before it lapses
 
     private static function clientId(): string
     {
@@ -37,14 +41,35 @@ final class GForms
         return Env::get('GOOGLE_REDIRECT_URI', 'http://127.0.0.1:8000/');
     }
 
-    private static function tokenFile(): string
-    {
-        return dirname(__DIR__) . '/google_token.json';
-    }
-
     public static function isConfigured(): bool
     {
         return self::clientId() !== '' && self::clientSecret() !== '';
+    }
+
+    /* ---------- session sign-in state ---------- */
+
+    /** True when the browser session holds a usable Google token. */
+    public static function isSignedIn(): bool
+    {
+        $token = $_SESSION['google_token'] ?? null;
+        if (!is_array($token) || empty($token['access_token'])) {
+            return false;
+        }
+        if (intval($token['expires_at'] ?? 0) - self::REFRESH_AHEAD >= time()) {
+            return true;
+        }
+        return trim(strval($token['refresh_token'] ?? '')) !== '';
+    }
+
+    public static function signedInEmail(): string
+    {
+        $token = $_SESSION['google_token'] ?? null;
+        return is_array($token) ? strval($token['email'] ?? '') : '';
+    }
+
+    public static function signOut(): void
+    {
+        unset($_SESSION['google_token']);
     }
 
     /* ---------- OAuth round-trip ---------- */
@@ -52,27 +77,14 @@ final class GForms
     public static function issueState(): string
     {
         $now = time();
-        foreach (['pending_states', 'completed_states'] as $map) {
-            foreach (($_SESSION[$map] ?? []) as $state => $expiry) {
-                if ($expiry < $now) {
-                    unset($_SESSION[$map][$state]);
-                }
+        foreach (($_SESSION['pending_states'] ?? []) as $state => $expiry) {
+            if ($expiry < $now) {
+                unset($_SESSION['pending_states'][$state]);
             }
         }
         $state = rtrim(strtr(base64_encode(random_bytes(24)), '+/', '-_'), '=');
         $_SESSION['pending_states'][$state] = $now + self::STATE_TTL;
         return $state;
-    }
-
-    /** True if $state completed a Google sign-in just now (consumed on use). */
-    public static function claimFreshSignin(string $state): bool
-    {
-        if (!isset($_SESSION['completed_states'][$state])) {
-            return false;
-        }
-        $expiry = $_SESSION['completed_states'][$state];
-        unset($_SESSION['completed_states'][$state]);
-        return $expiry >= time();
     }
 
     public static function buildAuthUrl(string $state): string
@@ -83,48 +95,58 @@ final class GForms
             'response_type' => 'code',
             'scope' => self::SCOPE,
             'access_type' => 'offline', // we need a refresh token, not just the 1-hour access token
-            // Re-ask for the account and the consent on every single sign-in.
+            // Re-ask for the account and the consent on every sign-in so a
+            // refresh token is always granted, even for returning accounts.
             'prompt' => 'consent select_account',
             'state' => $state,
         ];
         return self::AUTH_URL . '?' . http_build_query($params);
     }
 
-    /** Handle the redirect back from Google's consent page (rendered in the popup). */
-    public static function oauthCallbackHtml(string $code, string $state, string $error): string
+    /** Handle the redirect back from Google's consent page (rendered in the popup).
+     *
+     * Completes the sign-in into the session and returns the message to show.
+     * @return array{ok: bool, message: string, email: string, event: string}
+     */
+    public static function handleCallback(string $code, string $state, string $error): array
     {
         if ($error !== '') {
-            $message = "Google sign-in failed: $error";
-            $event = 'oauth-error';
-        } elseif ($code === '') {
-            $message = 'Google sign-in failed: no authorisation code was returned.';
-            $event = 'oauth-error';
-        } elseif (!self::consumeState($state)) {
-            $message = 'Sign-in session expired — close this window and try again.';
-            $event = 'oauth-error';
-        } else {
-            try {
-                self::exchangeCode($code);
-                // Mark this round-trip as freshly signed in, claimable by one form request.
-                $_SESSION['completed_states'][$state] = time() + self::FRESH_TTL;
-                $message = 'Google sign-in complete — you can close this window.';
-                $event = 'oauth-done';
-            } catch (RuntimeException $exc) {
-                $message = "Google sign-in failed: {$exc->getMessage()}";
-                $event = 'oauth-error';
-            }
+            return ['ok' => false, 'message' => "Google sign-in failed: $error", 'email' => '', 'event' => 'google-auth-error'];
         }
+        if ($code === '') {
+            return ['ok' => false, 'message' => 'Google sign-in failed: no authorisation code was returned.', 'email' => '', 'event' => 'google-auth-error'];
+        }
+        if (!self::consumeState($state)) {
+            return ['ok' => false, 'message' => 'Sign-in session expired — close this window and try again.', 'email' => '', 'event' => 'google-auth-error'];
+        }
+        try {
+            $token = self::exchangeCode($code);
+        } catch (RuntimeException $exc) {
+            return ['ok' => false, 'message' => 'Google sign-in failed: ' . $exc->getMessage(), 'email' => '', 'event' => 'google-auth-error'];
+        }
+        $_SESSION['google_token'] = $token;
+        $email = strval($token['email'] ?? '');
+        $message = $email !== ''
+            ? "Signed in as $email — you can close this window."
+            : 'Google sign-in complete — you can close this window.';
+        return ['ok' => true, 'message' => $message, 'email' => $email, 'event' => 'google-auth-done'];
+    }
 
-        $message = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
+    /** Rendered inside the popup; posts the outcome to the opener, then closes. */
+    public static function callbackHtml(array $result): string
+    {
+        $message = htmlspecialchars($result['message'], ENT_QUOTES, 'UTF-8');
+        $event = $result['event'];
+        $email = htmlspecialchars($result['email'], ENT_QUOTES, 'UTF-8');
         return <<<HTML
 <!doctype html>
 <html><body>
 <p>$message</p>
 <script>
   try {
-    window.opener && window.opener.postMessage({ type: "$event" }, "*");
+    window.opener && window.opener.postMessage({ type: "$event", email: "$email" }, "*");
   } catch (e) {}
-  setTimeout(function () { window.close(); }, 400);
+  setTimeout(function () { window.close(); }, 800);
 </script>
 </body></html>
 HTML;
@@ -140,7 +162,8 @@ HTML;
         return $expiry >= time();
     }
 
-    private static function exchangeCode(string $code): void
+    /** @return array<string, mixed> */
+    private static function exchangeCode(string $code): array
     {
         $res = Http::request('POST', self::TOKEN_URL, [
             'form' => [
@@ -162,76 +185,73 @@ HTML;
         if (empty($data['access_token'])) {
             throw new RuntimeException('token exchange returned no access token');
         }
-        $previous = self::loadToken() ?? [];
-        self::saveToken([
+        return [
             'access_token' => $data['access_token'],
-            'refresh_token' => isset($data['refresh_token']) ? $data['refresh_token'] : ($previous['refresh_token'] ?? ''),
+            'refresh_token' => strval($data['refresh_token'] ?? ''),
             'expires_at' => time() + intval($data['expires_in'] ?? 3600),
+            'email' => self::fetchEmail(strval($data['access_token'])),
+        ];
+    }
+
+    /** Best effort — an empty email just means the UI shows a generic signed-in state. */
+    private static function fetchEmail(string $accessToken): string
+    {
+        $res = Http::request('GET', self::USERINFO_URL, [
+            'headers' => ["Authorization: Bearer $accessToken"],
+            'timeout' => 15,
         ]);
+        $email = is_array($res['json']) ? strval($res['json']['email'] ?? '') : '';
+        return filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : '';
     }
 
-    /* ---------- token cache ---------- */
+    /* ---------- token upkeep ---------- */
 
-    /** @return array<string, mixed>|null */
-    private static function loadToken(): ?array
+    /** Refresh the session's access token if it lapses soon. Call with the session
+     * open so the renewed token is persisted. */
+    public static function ensureFreshToken(): void
     {
-        $raw = @file_get_contents(self::tokenFile());
-        if ($raw === false) {
-            return null;
-        }
-        $token = json_decode($raw, true);
-        return is_array($token) ? $token : null;
-    }
-
-    /** @param array<string, mixed> $token */
-    private static function saveToken(array $token): void
-    {
-        file_put_contents(self::tokenFile(), json_encode($token), LOCK_EX);
-        @chmod(self::tokenFile(), 0600);
-    }
-
-    public static function forgetToken(): void
-    {
-        @unlink(self::tokenFile());
-    }
-
-    private static function bearer(): string
-    {
-        $token = self::loadToken();
-        if ($token === null || empty($token['access_token'])) {
+        $token = $_SESSION['google_token'] ?? null;
+        if (!is_array($token) || empty($token['access_token'])) {
             throw new NotSignedInException('no Google sign-in yet');
         }
-        if (intval($token['expires_at'] ?? 0) - 60 < time()) {
-            $token = self::refresh($token);
+        if (intval($token['expires_at'] ?? 0) - self::REFRESH_AHEAD >= time()) {
+            return;
         }
-        return strval($token['access_token']);
-    }
-
-    /** @param array<string, mixed> $token @return array<string, mixed> */
-    private static function refresh(array $token): array
-    {
+        $refresh = trim(strval($token['refresh_token'] ?? ''));
+        if ($refresh === '') {
+            self::signOut();
+            throw new NotSignedInException('your Google session has expired — sign in again');
+        }
         $res = Http::request('POST', self::TOKEN_URL, [
             'form' => [
                 'client_id' => self::clientId(),
                 'client_secret' => self::clientSecret(),
-                'refresh_token' => strval($token['refresh_token'] ?? ''),
+                'refresh_token' => $refresh,
                 'grant_type' => 'refresh_token',
             ],
             'timeout' => 30,
         ]);
-        if ($res['status'] !== 200) {
-            self::forgetToken();
-            throw new NotSignedInException('sign-in has expired, please sign in again');
-        }
         $data = is_array($res['json']) ? $res['json'] : [];
-        if (empty($data['access_token'])) {
-            self::forgetToken();
-            throw new NotSignedInException('sign-in has expired, please sign in again');
+        if ($res['status'] !== 200 || empty($data['access_token'])) {
+            self::signOut();
+            throw new NotSignedInException('your Google session has expired — sign in again');
         }
-        $token['access_token'] = $data['access_token'];
-        $token['expires_at'] = time() + intval($data['expires_in'] ?? 3600);
-        self::saveToken($token);
-        return $token;
+        $_SESSION['google_token'] = [
+            'access_token' => strval($data['access_token']),
+            'refresh_token' => $refresh,
+            'expires_at' => time() + intval($data['expires_in'] ?? 3600),
+            'email' => strval($token['email'] ?? ''),
+        ];
+    }
+
+    /** The in-memory session token — ensureFreshToken() must have run first. */
+    private static function bearer(): string
+    {
+        $token = is_array($_SESSION['google_token'] ?? null) ? $_SESSION['google_token'] : [];
+        if (empty($token['access_token']) || intval($token['expires_at'] ?? 0) - 60 < time()) {
+            throw new NotSignedInException('your Google session has expired — sign in again');
+        }
+        return strval($token['access_token']);
     }
 
     /* ---------- form creation ---------- */
@@ -346,7 +366,7 @@ HTML;
     }
 }
 
-/** No usable Google token — the browser must visit the consent URL first. */
+/** No usable Google sign-in — the browser must visit the consent URL first. */
 class NotSignedInException extends RuntimeException
 {
 }

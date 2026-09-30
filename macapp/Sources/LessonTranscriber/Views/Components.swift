@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import LessonKit
 
@@ -87,6 +88,155 @@ struct MarkdownText: View {
 }
 
 
+// MARK: - AI loading overlay
+//
+// The web app's #aiOverlay, natively: a dimmed backdrop with a centered card —
+// spinner, cycling step text, progress bar, Cancel. Also hosts the Google
+// sign-in wait with its Try Again second chance for a closed browser tab.
+
+struct AIOverlayView: View {
+    @ObservedObject var state: AppState
+
+    @State private var stepIndex = 0
+    private let stepTimer = Timer.publish(every: 2.6, on: .main, in: .common)
+        .autoconnect()
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+            if let overlay = state.aiOverlay {
+                card(overlay)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.16), value: state.aiOverlay == nil)
+        .onReceive(stepTimer) { _ in stepIndex += 1 }
+        .onChange(of: state.aiOverlay?.phase) { _, _ in stepIndex = 0 }
+    }
+
+    @ViewBuilder
+    private func card(_ overlay: AIOverlayState) -> some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.regular)
+            Text(title(overlay))
+                .font(.headline)
+            Text(currentStep(overlay))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .frame(minHeight: 40, alignment: .top)
+                .id(stepIndex)
+                .transition(.opacity)
+                .animation(.easeIn(duration: 0.2), value: stepIndex)
+
+            if case .working = overlay.phase {
+                SlidingProgressBar()
+                    .frame(width: 220, height: 5)
+                    .padding(.bottom, 2)
+            }
+            if case .authFailed(let message) = overlay.phase {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 10) {
+                switch overlay.phase {
+                case .auth, .authFailed:
+                    Button("Try Again") { state.retryGoogleSignIn() }
+                        .buttonStyle(HexPrimaryButtonStyle())
+                    Button("Cancel", role: .cancel) { state.cancelAI() }
+                        .buttonStyle(HexButtonStyle())
+                case .working:
+                    Button("Cancel", role: .cancel) { state.cancelAI() }
+                        .buttonStyle(HexButtonStyle())
+                }
+            }
+            .padding(.top, 2)
+        }
+        .padding(28)
+        .frame(width: 360)
+        .background(Color.hexCard)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(Color.hexBorder)
+        )
+        .padding(40)
+    }
+
+    private func title(_ overlay: AIOverlayState) -> String {
+        switch overlay.kind {
+        case .summary: return "AI Summary"
+        case .quiz: return "Google Form Quiz"
+        }
+    }
+
+    private func currentStep(_ overlay: AIOverlayState) -> String {
+        switch overlay.phase {
+        case .auth:
+            return "Waiting for Google — approve access in your browser. "
+                + "Closed the page by accident? Click Try Again."
+        case .authFailed:
+            return "Sign-in didn't complete."
+        case .working(let work):
+            let steps = steps(for: work)
+            return steps[stepIndex % steps.count]
+        }
+    }
+
+    private func steps(for work: AIOverlayState.Work) -> [String] {
+        switch work {
+        case .summary:
+            return ["Reading the transcript…",
+                    "Picking out the key ideas…",
+                    "Structuring the summary…",
+                    "Polishing the wording…",
+                    "Still working — long lessons take a little longer…"]
+        case .quizQuestions:
+            return ["Re-reading the lesson…",
+                    "Drafting the questions…",
+                    "Writing the answer key…",
+                    "Checking every question…",
+                    "Still working — this can take up to a minute…"]
+        case .quizForm:
+            return ["Contacting Google…",
+                    "Creating the quiz form…",
+                    "Adding the questions…",
+                    "Marking the correct answers…",
+                    "Still working — Google is taking its time…"]
+        }
+    }
+}
+
+/// Indeterminate monochrome bar — a white pill sweeping the track, the native
+/// counterpart of the web overlay's CSS animation.
+struct SlidingProgressBar: View {
+    @State private var forward = false
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.10))
+                Capsule()
+                    .fill(Color.white.opacity(0.85))
+                    .frame(width: geo.size.width * 0.42)
+                    .offset(x: forward ? geo.size.width * 0.58 : 0)
+            }
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
+                forward.toggle()
+            }
+        }
+    }
+}
+
 // MARK: - Hex-style palette
 //
 // Forced monochrome theme copied from Hex's design: flat black backdrop,
@@ -111,6 +261,11 @@ extension Color {
     static let hexButton = Color(red: 0x17/255.0, green: 0x17/255.0, blue: 0x17/255.0)
     /// Button hairline border (lighter grey, #393939).
     static let hexButtonBorder = Color(red: 0x39/255.0, green: 0x39/255.0, blue: 0x39/255.0)
+    /// Segmented-control track — dark recessed well (#101010), darker than the
+    /// card behind it so unselected segments visibly recede.
+    static let hexSegmentTrack = Color(red: 0x10/255.0, green: 0x10/255.0, blue: 0x10/255.0)
+    /// Selected segment fill — lighter grey pill over the track (≈ #363636).
+    static let hexSegmentSelected = Color.white.opacity(0.16)
 }
 
 // MARK: - Building blocks
@@ -276,5 +431,74 @@ struct HexPrimaryButtonStyle: ButtonStyle {
             label: configuration.label,
             weight: .semibold,
             isPressed: configuration.isPressed)
+    }
+}
+
+// MARK: - Segmented picker
+//
+// Stock `.segmented` pickers give no control over segment backgrounds, and the
+// native greys leave the chosen segment barely distinguishable on the dark
+// theme. This replacement keeps the segmented shape in monochrome: a dark
+// recessed track, sidebar-grey labels for the unselected options, and a
+// lighter pill that slides under the selection.
+
+struct HexSegmentedPicker<Option: Hashable & Identifiable>: View {
+    @Binding var selection: Option
+    let options: [Option]
+    let label: KeyPath<Option, String>
+
+    @Namespace private var highlight
+    @State private var hovering: Option?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                if index > 0 && showsDivider(before: option, after: options[index - 1]) {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(width: 1, height: 14)
+                }
+                segment(option)
+            }
+        }
+        .padding(2)
+        .background(Color.hexSegmentTrack)
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(Color.hexBorder)
+        )
+    }
+
+    /// Native-style hairline between two neighbours that are both unselected.
+    private func showsDivider(before option: Option, after previous: Option) -> Bool {
+        option != selection && previous != selection
+    }
+
+    private func segment(_ option: Option) -> some View {
+        let isSelected = option == selection
+        return Button {
+            withAnimation(.easeOut(duration: 0.15)) { selection = option }
+        } label: {
+            Text(option[keyPath: label])
+                .font(.callout.weight(isSelected ? .medium : .regular))
+                .foregroundStyle(isSelected ? Color.white : Color.hexSidebarText)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Color.hexSegmentSelected)
+                            .matchedGeometryEffect(id: "hex-segment-highlight", in: highlight)
+                    } else if hovering == option {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Color.white.opacity(0.05))
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 ? option : nil }
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 }

@@ -95,7 +95,7 @@ public enum SummaryLength: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .brief: return "A quick overview — a few sentences and the essentials."
         case .standard: return "The default: overview, key points, key terms, examples, follow-ups."
-        case .inDepth: return "Fuller notes with more detail in every section — good for revisiting the session."
+        case .inDepth: return "Fuller notes with more detail in every section."
         }
     }
 }

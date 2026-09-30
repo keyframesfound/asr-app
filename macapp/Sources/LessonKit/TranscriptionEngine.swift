@@ -1,3 +1,4 @@
+import CoreML
 import Foundation
 import FluidAudio
 
@@ -51,6 +52,22 @@ public final class TranscriptionEngine: @unchecked Sendable {
         if let cached = cachedModels(coreMLPrecision) { return cached }
 
         onProgress(StageUpdate(stage: "Loading speech model…", progress: 5))
+
+        // Release builds ship the model inside the bundle: load straight
+        // from there — no first-run download, no cache copy. A corrupt or
+        // missing bundle falls through to the hub path below, which fetches
+        // into the user cache as before.
+        if let bundled = Self.bundledModelDirectory("sensevoice-small-coreml"),
+           SenseVoiceModels.modelsExist(at: bundled, precision: coreMLPrecision) {
+            let task = Task.detached(priority: .userInitiated) {
+                try SenseVoiceModels.load(from: bundled, precision: coreMLPrecision)
+            }
+            if let loaded = try? await task.value {
+                storeModels(loaded, precision: coreMLPrecision)
+                return loaded
+            }
+        }
+
         let loaded = try await SenseVoiceModels.downloadAndLoad(precision: coreMLPrecision) { download in
             // Model download/preparation maps onto the 0–5% head of the bar.
             let percent = download.fractionCompleted * 5
@@ -100,6 +117,11 @@ public final class TranscriptionEngine: @unchecked Sendable {
     /// "first run downloads the model" hint otherwise).
     public static func modelsDownloaded(precision: EncoderPrecision) -> Bool {
         let coreMLPrecision: SenseVoiceEncoderPrecision = precision == .int8 ? .int8 : .fp16
+        // Release builds ship the model inside the bundle — nothing to download.
+        if let bundled = bundledModelDirectory("sensevoice-small-coreml"),
+           SenseVoiceModels.modelsExist(at: bundled, precision: coreMLPrecision) {
+            return true
+        }
         let fm = FileManager.default
         guard let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return false
@@ -108,6 +130,40 @@ public final class TranscriptionEngine: @unchecked Sendable {
             .appendingPathComponent("FluidAudio/Models", isDirectory: true)
             .appendingPathComponent("sensevoice-small-coreml", isDirectory: true)
         return SenseVoiceModels.modelsExist(at: dir, precision: coreMLPrecision)
+    }
+
+    // MARK: - Bundled models
+
+    /// Staged model directory inside the app bundle
+    /// (Contents/Resources/FluidAudio/Models/<name>, populated by
+    /// Scripts/fetch_model.sh and bundled by build_app.sh). nil in dev
+    /// builds without staged models.
+    public static func bundledModelDirectory(_ name: String) -> URL? {
+        guard let resources = Bundle.main.resourceURL else { return nil }
+        let url = resources
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return url
+    }
+
+    /// VAD loads straight from the bundle when present — the first
+    /// transcription stays fully offline. Without staged models the ~1 MB
+    /// model downloads into the user cache as before.
+    private static func makeVadManager() async throws -> VadManager {
+        let config = VadConfig(defaultThreshold: 0.75)
+        if let bundled = bundledModelDirectory("silero-vad-coreml") {
+            let modelURL = bundled.appendingPathComponent(ModelNames.VAD.sileroVadFile)
+            let mlConfig = MLModelConfiguration()
+            mlConfig.computeUnits = config.computeUnits
+            if let model = try? MLModel(contentsOf: modelURL, configuration: mlConfig) {
+                return try await VadManager(config: config, vadModel: model)
+            }
+        }
+        return try await VadManager(config: config)
     }
 
     // MARK: - Pipeline
@@ -129,7 +185,7 @@ public final class TranscriptionEngine: @unchecked Sendable {
         let models = try await loadModels(precision: precision, onProgress: onUpdate)
 
         onUpdate(StageUpdate(stage: "Detecting speech segments…", progress: 8))
-        let vad = try await VadManager(config: VadConfig(defaultThreshold: 0.75))
+        let vad = try await Self.makeVadManager()
         var segmentation = VadSegmentationConfig.default
         segmentation.minSpeechDuration = 0.25
         segmentation.minSilenceDuration = 0.4

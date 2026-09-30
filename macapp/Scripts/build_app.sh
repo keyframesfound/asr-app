@@ -42,6 +42,19 @@ if command -v iconutil >/dev/null; then
   rm -rf "$(dirname "$ICONSET")"
 fi
 
+# Speech models (SenseVoice + Silero VAD), staged by Scripts/fetch_model.sh,
+# so first use never downloads from HuggingFace. SKIP_MODELS=1 keeps dev
+# bundles small; without staged models the app falls back to downloading.
+if [[ "${SKIP_MODELS:-0}" == "1" ]]; then
+  echo "==> models skipped (SKIP_MODELS=1)"
+elif [[ -d Resources/FluidAudio/Models ]]; then
+  echo "==> bundling speech models"
+  ditto "Resources/FluidAudio" "$APP/Contents/Resources/FluidAudio"
+else
+  echo "warning: Resources/FluidAudio is missing — run Scripts/fetch_model.sh." >&2
+  echo "         This build downloads the model on first transcription." >&2
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

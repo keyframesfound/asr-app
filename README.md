@@ -17,7 +17,7 @@ Lesson recordings in → transcripts, AI summaries and Google Form quizzes out. 
 Open **Lesson Transcriber.app** (built into `macapp/dist/`), drop an MP3 (or WAV/M4A/AAC/OGG/FLAC/MP4) onto the window, pick the lesson-audio language (auto / Cantonese / Mandarin / English) and it transcribes **on this Mac** — nothing is uploaded. Then:
 
 - **✨ AI Summary** — Overview / Key Points / Key Terms / Examples / Follow-ups, written in 繁體中文（香港）, 简体中文 or English. The **Settings** pane (sidebar, or ⌘,) chooses the length: **Brief**, **Standard** or **In-depth**.
-- **📝 Generate Google Form Quiz** — writes the questions, then creates a quiz-mode Google Form in your Drive (1 point each, correct answers marked, explanations on wrong answers). The first quiz asks for a Google sign-in in your browser; you stay signed in (log out any time in Settings). The quiz card shows the **student link** and an **Edit form** link.
+- **📝 Generate Google Form Quiz** — writes the questions, then creates a quiz-mode Google Form in your Drive (1 point each, correct answers marked, explanations on wrong answers). AI summary and quiz both unlock after a one-time Google sign-in in your browser; you stay signed in (log out any time in Settings). While they run, an agent-style loading overlay shows the progress with a Cancel button, and if the sign-in tab closes before you approve, **Try Again** reopens it for a second go. The quiz card shows the **student link** and an **Edit form** link.
 - **⬇ Word** on the transcript/summary cards — formatted `.docx` downloads.
 - **Share** — the transcript card button (or right-click a lesson → Share…) opens the macOS share sheet with the transcript (and summary) Word files.
 - **Right-click a lesson** in the sidebar to **Rename…**, **Share…** or **Delete** it.
@@ -187,7 +187,7 @@ Expected throughput for a **1-hour lesson** (rough): Mac with Metal ~2 min; 4-co
 - Authorized redirect URI: your app's root URL exactly, e.g. `https://lessons.example.com/` (locally: `http://127.0.0.1:8000/`) — and put the same value in `.env` as `GOOGLE_REDIRECT_URI`
 - Put the client ID + secret into `.env`
 
-No Google Workspace or special account is needed — a normal Gmail works. The consent screen can stay in "Testing" mode; add your own account as a test user. Every quiz click opens Google's own sign-in/consent popup — you approve each time; nothing is kept signed in between quizzes (the token file `google_token.json` is deleted after each quiz). *(The Mac app keeps you signed in instead — see its section above.)*
+No Google Workspace or special account is needed — a normal Gmail works. The consent screen can stay in "Testing" mode; add your own account as a test user. The AI buttons (summary, quiz, Google Form) unlock after one Google sign-in per browser session: the token lives in the PHP session (never on disk), is refreshed automatically, and ends when you sign out or close the browser. If the sign-in popup is closed before finishing, the gate shows a **Try again** button for a second go.
 
 ### Daily use (web)
 
@@ -199,13 +199,13 @@ asr-service/run.sh   # terminal 1 (or a systemd service)
 
 1. Drop an MP3 (or WAV/M4A/AAC/OGG/FLAC/MP4) into the page and pick the lesson-audio language (auto / Cantonese / Mandarin / English).
 2. The transcript appears at the bottom with timestamps (also saved under `transcripts/`).
-3. Then: **✨ AI Summary**, **📝 Generate Google Form Quiz**, **⬇ Word** downloads — the same outputs as the Mac app.
+3. Sign in with Google once (the gate card above the AI buttons) — then: **✨ AI Summary**, **📝 Generate Google Form Quiz**, **⬇ Word** downloads — the same outputs as the Mac app.
 
 ### Production notes (web)
 
 - **systemd** is the clean way to keep both parts alive — one unit for `php -S`/php-fpm, one for the sidecar (`ExecStart=/path/asr-service/run.sh`, `Restart=on-failure`). A sidecar restart drops in-flight transcription jobs (the page tells you to re-upload); finished transcripts are kept by the PHP app.
 - The sidecar has **no authentication** — never expose port 8100 to the internet; keep it on localhost or a private network.
-- `google_token.json` (written during Google sign-in) should not be web-accessible — with DocumentRoot at `public/` it isn't.
+- The Google token lives only in the PHP session (no token file on disk). Session cookies carry the OAuth state, so all hosts/ports must share one origin (the normal setup).
 - PHP session cookies carry the OAuth state, so all hosts/ports must share one origin (the normal setup).
 
 ### How transcription works (web)

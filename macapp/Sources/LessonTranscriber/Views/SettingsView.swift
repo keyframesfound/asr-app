@@ -26,14 +26,11 @@ struct SettingsView: View {
                         subtitle: settings.summaryLength.blurb,
                         showsDivider: false)
                     {
-                        Picker("", selection: $settings.summaryLength) {
-                            ForEach(SummaryLength.allCases) { length in
-                                Text(length.label).tag(length)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 300)
+                        HexSegmentedPicker(
+                            selection: $settings.summaryLength,
+                            options: SummaryLength.allCases,
+                            label: \.label)
+                            .frame(width: 300)
                     }
                 }
 
@@ -42,8 +39,8 @@ struct SettingsView: View {
                     SettingRow(
                         title: auth.isSignedIn ? (auth.email ?? "Signed in") : "Not signed in",
                         subtitle: auth.isSignedIn
-                            ? "Quiz forms are created in this account's Google Drive."
-                            : "Sign in once to create quiz forms in your Google Drive — you stay signed in until you log out.",
+                            ? "AI summaries and quiz forms are unlocked for this account."
+                            : "AI summaries and quiz forms unlock after a one-time Google sign-in — you stay signed in until you log out.",
                         showsDivider: auth.lastError?.isEmpty == false)
                     {
                         HStack(spacing: 10) {
@@ -65,11 +62,21 @@ struct SettingsView: View {
                     }
 
                     if let error = auth.lastError, !error.isEmpty {
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                            Spacer()
+                            // Second chance for a closed browser tab or a
+                            // dismissed consent page.
+                            Button("Try Again") {
+                                Task { try? await auth.signIn() }
+                            }
+                            .buttonStyle(HexButtonStyle())
+                            .disabled(auth.busy)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
                     }
                 }
 

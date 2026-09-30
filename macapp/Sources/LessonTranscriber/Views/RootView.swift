@@ -78,6 +78,12 @@ struct RootView: View {
             Text(state.globalError ?? "")
         }
         .background { WindowMover() }
+        // AI loading overlay — Google sign-in wait + summary/quiz generation.
+        .overlay {
+            if state.aiOverlay != nil {
+                AIOverlayView(state: state)
+            }
+        }
         .task { await updater.startupCheckIfNeeded() }
     }
 
