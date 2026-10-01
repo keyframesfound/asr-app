@@ -286,7 +286,8 @@ public final class TranscriptionEngine: @unchecked Sendable {
                 results[index] = TranscriptSegment(start: start, end: end, text: "")
             } else {
                 let text = try await asr.transcribe(audio: slice)
-                results[index] = TranscriptSegment(start: start, end: end, text: text)
+                // SenseVoice emits Simplified; transcripts are Traditional (HK).
+                results[index] = TranscriptSegment(start: start, end: end, text: S2T.convert(text))
             }
             done += 1
             onUpdate(StageUpdate(stage: "Transcribing… \(done)/\(total)",
