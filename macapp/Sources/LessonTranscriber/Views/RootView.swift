@@ -86,9 +86,6 @@ struct RootView: View {
             }
         }
         .task { await updater.startupCheckIfNeeded() }
-        // Speech model warms up while the user looks around; a first
-        // transcription that races it simply joins the same load.
-        .task { state.prewarmModel() }
         // Dock-icon click after the window was closed — the app delegate
         // asks for the main window back.
         .onReceive(NotificationCenter.default.publisher(for: .reopenMainWindow)) { _ in
@@ -103,51 +100,36 @@ struct RootView: View {
         return state.lessons.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
     }
 
-    /// Version pinned to the very bottom of the sidebar; gains a model warm-up
-    /// line while the speech model loads, and an update pill whenever the
-    /// updater has found a newer release (tap → Settings).
+    /// Version pinned to the very bottom of the sidebar; gains an update pill
+    /// whenever the updater has found a newer release (tap → Settings).
     private var versionFooter: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let warmupStage = state.modelWarmupStage {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.mini)
-                    Text(warmupStage)
-                        .font(.footnote)
-                        .foregroundStyle(Color.hexSidebarText)
-                        .lineLimit(1)
-                }
-                .transition(.opacity)
-            }
-            HStack(spacing: 8) {
-                Text("Version \(version)")
-                    .font(.footnote)
-                    .foregroundStyle(Color.hexSidebarText)
-                if updater.updateAvailable {
-                    Button {
-                        state.showSettings = true
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.down.circle.fill")
-                                .font(.system(size: 10, weight: .semibold))
-                            Text(updater.updateVersion.map { "v\($0)" } ?? "Update")
-                        }
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.hexSelected, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.hexButtonBorder))
+        HStack(spacing: 8) {
+            Text("Version \(version)")
+                .font(.footnote)
+                .foregroundStyle(Color.hexSidebarText)
+            if updater.updateAvailable {
+                Button {
+                    state.showSettings = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(updater.updateVersion.map { "v\($0)" } ?? "Update")
                     }
-                    .buttonStyle(.plain)
-                    .help("Update available — click to install")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.hexSelected, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.hexButtonBorder))
                 }
+                .buttonStyle(.plain)
+                .help("Update available — click to install")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
-        .animation(.easeInOut(duration: 0.25), value: state.modelWarmupStage)
     }
 
     /// Marketing version from the built app's Info.plist (dev builds fall

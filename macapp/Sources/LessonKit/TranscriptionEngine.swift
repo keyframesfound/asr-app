@@ -86,18 +86,6 @@ public final class TranscriptionEngine: @unchecked Sendable {
         return try await task.value
     }
 
-    /// Release the loaded models and per-language managers. The idle-unload
-    /// policy in AppState calls this so an idle app holds no model memory;
-    /// the next transcription simply loads again (fast once the system's
-    /// Neural Engine compile cache is warm).
-    public func unloadModels() {
-        lock.lock()
-        defer { lock.unlock() }
-        models = nil
-        managers = [:]
-        loadedPrecision = nil
-    }
-
     private func registerProgressHandler(
         _ precision: SenseVoiceEncoderPrecision,
         _ handler: @escaping @Sendable (StageUpdate) -> Void
