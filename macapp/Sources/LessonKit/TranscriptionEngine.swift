@@ -136,6 +136,10 @@ public final class TranscriptionEngine: @unchecked Sendable {
             let loadTask = Task.detached(priority: .userInitiated) {
                 try SenseVoiceModels.load(from: bundled, precision: coreMLPrecision)
             }
+            let compileTicker = Self.makeCompileTicker { [weak self] update in
+                self?.broadcastProgress(update, precision: coreMLPrecision)
+            }
+            defer { compileTicker.cancel() }
             if let loaded = try? await loadTask.value {
                 storeModels(loaded, precision: coreMLPrecision)
                 return loaded
@@ -157,6 +161,46 @@ public final class TranscriptionEngine: @unchecked Sendable {
 
         storeModels(loaded, precision: coreMLPrecision)
         return loaded
+    }
+
+    // MARK: - ANE compile estimate
+
+    /// Warm-load grace: a load that hits the ANE compile cache finishes in
+    /// well under a second, so a load still running past this is compiling.
+    private static let warmLoadGraceSeconds = 3.0
+    /// Observed Neural Engine specialisation time for the SenseVoice encoder
+    /// (~145 s on the reference machine, fp16 and int8 alike). Core ML
+    /// recompiles after every re-signed app update and exposes no progress
+    /// for the compile, so the bar is driven by elapsed time.
+    private static let estimatedCompileSeconds = 150.0
+
+    /// Estimated progress for the once-per-update Neural Engine compile:
+    /// nothing while the grace window rules out a warm load, then a linear
+    /// ramp toward `estimatedCompileSeconds` clamped just under the next
+    /// pipeline stage (38%). A faster machine simply jumps ahead when the
+    /// load returns; a slower one sits at the clamp until it does. Cancel
+    /// the returned task when the load finishes.
+    private static func makeCompileTicker(
+        broadcast: @escaping @Sendable (StageUpdate) -> Void
+    ) -> Task<Void, Never> {
+        Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: UInt64(warmLoadGraceSeconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            let start = Date()
+            while !Task.isCancelled {
+                let fraction = min(1, Date().timeIntervalSince(start) / estimatedCompileSeconds)
+                // Re-check before broadcasting: the load can finish between
+                // the sleep and here, and a late estimate must not overwrite
+                // the stage that follows the load.
+                if Task.isCancelled { return }
+                broadcast(StageUpdate(
+                    stage: "Optimising speech model for this Mac — about 2 min, "
+                        + "once after each update…",
+                    progress: 6 + 28 * fraction))
+                if fraction >= 1 { return }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
     }
 
     private func cachedModels(_ precision: SenseVoiceEncoderPrecision) -> SenseVoiceModels? {
@@ -259,7 +303,10 @@ public final class TranscriptionEngine: @unchecked Sendable {
 
         let models = try await loadModels(precision: precision, onProgress: onUpdate)
 
-        onUpdate(StageUpdate(stage: "Detecting speech segments…", progress: 8))
+        // Scale: audio 2, load 5 (cold ANE compile ramps 6–34 via the
+        // ticker), VAD 38, transcription 40–98. Monotonic for both a warm
+        // load (5 → 38) and a cold one (5 → 34 → 38).
+        onUpdate(StageUpdate(stage: "Detecting speech segments…", progress: 38))
         let vad = try await Self.makeVadManager()
         var segmentation = VadSegmentationConfig.default
         segmentation.minSpeechDuration = 0.25
@@ -291,7 +338,7 @@ public final class TranscriptionEngine: @unchecked Sendable {
             }
             done += 1
             onUpdate(StageUpdate(stage: "Transcribing… \(done)/\(total)",
-                                 progress: 10 + 88 * Double(done) / Double(total)))
+                                 progress: 40 + 58 * Double(done) / Double(total)))
             onSegments(results.compactMap { $0 }.filter { !$0.text.isEmpty })
         }
 
