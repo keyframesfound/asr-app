@@ -1,7 +1,7 @@
 ---
 name: release-macapp
 description: >
-  Build, notarize and publish a Lesson Transcriber (macapp) release to GitHub
+  Build, notarize and publish a Transcriber (macapp) release to GitHub
   Releases — DMG for humans + zip for the in-app updater — via the REST API.
   Use whenever the user asks to release, ship, publish or cut a new version of
   the Mac app, make/pack a DMG, or bump the app version — even if they just say
@@ -9,7 +9,7 @@ description: >
   dev builds (SKIP_SIGN=1) or the PHP web app.
 ---
 
-# Releasing Lesson Transcriber (macapp)
+# Releasing Transcriber (macapp)
 
 Full pipeline: working tree → built+signed app → notarized+stapled → updater
 zip + DMG → published GitHub release. Wall clock ≈ 15–25 min, most of it
@@ -47,14 +47,14 @@ From `macapp/`:
 
 1. `cd macapp && BUILD="$(date +%Y%m%d)" ./Scripts/build_app.sh`   # VERSION comes from the session export
    - Sets up DEVELOPER_DIR for full Xcode itself; bundles models + icon + baked config; signs inside-out with the Developer ID identity.
-   - **Gate before trusting the build:** `/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "dist/Lesson Transcriber.app/Contents/Info.plist"` must print `$VERSION`. If it prints 1.0.0, VERSION wasn't set — rebuild, do not continue.
+   - **Gate before trusting the build:** `/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "dist/Transcriber.app/Contents/Info.plist"` must print `$VERSION`. If it prints 1.0.0, VERSION wasn't set — rebuild, do not continue.
    - **If the final bundle codesign fails with "resource fork, Finder information, or similar detritus not allowed" — that's expected with the 452 MB model bundle.** The compile/bundle/config steps succeeded; do NOT retry signing in `dist/` (iCloud re-stamps xattrs faster than you can strip them). Move to staging.
 2. Stage and sign OUTSIDE the repo (this is where the real signature happens):
    ```sh
    WORK=$(mktemp -d /tmp/lt-release-XXXX)
    # Name the bundle correctly NOW — the updater zip inherits this directory name.
-   ditto "dist/Lesson Transcriber.app" "$WORK/Lesson Transcriber.app"
-   APP="$WORK/Lesson Transcriber.app"
+   ditto "dist/Transcriber.app" "$WORK/Transcriber.app"
+   APP="$WORK/Transcriber.app"
    xattr -cr "$APP"
    CS=(codesign --force --options runtime --timestamp --sign 2D261A564FDA2A8D755E4C059621ED78A8F4B689)  # hash from preflight step 1
    "${CS[@]}" "$APP/Contents/MacOS/ltctl"
@@ -68,10 +68,10 @@ From `macapp/`:
 
 ```sh
 cd "$WORK"
-ditto -c -k --keepParent "Lesson Transcriber.app" .notarize.zip
+ditto -c -k --keepParent "Transcriber.app" .notarize.zip
 xcrun notarytool submit .notarize.zip --keychain-profile LESSON_NOTARY --wait   # 5–10 min
-xcrun stapler staple "Lesson Transcriber.app"
-xcrun stapler validate "Lesson Transcriber.app"   # must print "The validate action worked!"
+xcrun stapler staple "Transcriber.app"
+xcrun stapler validate "Transcriber.app"   # must print "The validate action worked!"
 ```
 
 - **Do not run `spctl -a` at all during a release** — not before stapling (it caches the per-cdhash "rejected / Unnotarized Developer ID" verdict, which then persists even after stapling, on fresh paths too; only `sudo pkill -9 syspolicyd` clears it — sudo needs a password here) and not after stapling as a "final check" (same poisoned verdict comes back and wastes an investigation loop). The gates that count: `stapler validate` printing "The validate action worked!" + `notarytool history --keychain-profile LESSON_NOTARY --output-format json` showing the submission **Accepted**. Recipients are unaffected either way.
@@ -80,12 +80,12 @@ xcrun stapler validate "Lesson Transcriber.app"   # must print "The validate act
 
 ```sh
 cd "<repo>/macapp"
-ditto -c -k --keepParent "$WORK/Lesson Transcriber.app" "dist/Lesson Transcriber-$VERSION.zip"
+ditto -c -k --keepParent "$WORK/Transcriber.app" "dist/Transcriber-$VERSION.zip"
 # Payload sanity: version + baked repo + models present, .app at zip root
-unzip -l "dist/Lesson Transcriber-$VERSION.zip" | head -5     # must show "Lesson Transcriber.app/" first
-unzip -p "dist/Lesson Transcriber-$VERSION.zip" "Lesson Transcriber.app/Contents/Info.plist" | plutil -p - | grep ShortVersion   # must equal $VERSION
-rm -rf "dist/Lesson Transcriber.app"
-ditto "$WORK/Lesson Transcriber.app" "dist/Lesson Transcriber.app"   # stapled copy for make_dmg.sh
+unzip -l "dist/Transcriber-$VERSION.zip" | head -5     # must show "Transcriber.app/" first
+unzip -p "dist/Transcriber-$VERSION.zip" "Transcriber.app/Contents/Info.plist" | plutil -p - | grep ShortVersion   # must equal $VERSION
+rm -rf "dist/Transcriber.app"
+ditto "$WORK/Transcriber.app" "dist/Transcriber.app"   # stapled copy for make_dmg.sh
 ./Scripts/make_dmg.sh    # validates staple, stages outside the repo itself, signs + notarizes + staples the DMG
 ```
 
@@ -94,6 +94,15 @@ Transcriber-$VERSION.dmg`. The zip's top-level directory MUST be `Lesson
 Transcriber.app/` — the updater unpacks and swaps in whatever is at the root,
 so a generically-named staging dir (`app/`) produces an update that can't
 install.
+
+**App renamed in v1.3.0** ("Lesson Transcriber" → "Transcriber"): the bundle
+name, zip/DMG asset names and updater zip root are `Transcriber*` from here
+on. The bundle ID (`com.asrweb.lesson-transcriber`), the keychain service, the
+`Application Support/LessonTranscriber` data dir and the `LessonTranscriber`
+executable name are DELIBERATELY unchanged (lessons, settings and the Google
+sign-in survive; the unpack guard compares bundle IDs). `AppUpdater` installs
+the update under the staged bundle's own name and removes the old-named
+bundle, so v1.2.0 users end up with `/Applications/Transcriber.app`.
 
 ## Publish: draft → upload → publish
 
@@ -105,17 +114,17 @@ PAT=$(printf "protocol=https\nhost=github.com\npath=keyframesfound/asr-app.git\n
 
 # 1. Draft release (invisible to the updater and to humans)
 curl -s -X POST -H "Authorization: Bearer $PAT" -H "Accept: application/vnd.github+json" \
-  -d "$(python3 -c 'import json;print(json.dumps({"tag_name":"vX.Y.Z","target_commitish":"main","name":"Lesson Transcriber X.Y.Z","body":open("/tmp/notes.md").read(),"draft":True,"prerelease":False}))')" \
+  -d "$(python3 -c 'import json;print(json.dumps({"tag_name":"vX.Y.Z","target_commitish":"main","name":"Transcriber X.Y.Z","body":open("/tmp/notes.md").read(),"draft":True,"prerelease":False}))')" \
   https://api.github.com/repos/keyframesfound/asr-app/releases        # → note "id"
 
 # 2. Upload BOTH assets (~450 MB each, minutes; --retry for flaky wifi)
 curl -s --retry 3 -X POST -H "Authorization: Bearer $PAT" -H "Content-Type: application/zip" \
-  --data-binary @"dist/Lesson Transcriber-$VERSION.zip" \
-  "https://uploads.github.com/repos/keyframesfound/asr-app/releases/<id>/assets?name=Lesson%20Transcriber-$VERSION.zip"
+  --data-binary @"dist/Transcriber-$VERSION.zip" \
+  "https://uploads.github.com/repos/keyframesfound/asr-app/releases/<id>/assets?name=Transcriber-$VERSION.zip"
 curl -s --retry 3 -X POST -H "Authorization: Bearer $PAT" -H "Content-Type: application/x-apple-diskimage" \
-  --data-binary @"dist/Lesson Transcriber-$VERSION.dmg" \
-  "https://uploads.github.com/repos/keyframesfound/asr-app/releases/<id>/assets?name=Lesson%20Transcriber-$VERSION.dmg"
-#   GitHub stores the names dot-separated (Lesson.Transcriber-1.1.0.zip) — expected.
+  --data-binary @"dist/Transcriber-$VERSION.dmg" \
+  "https://uploads.github.com/repos/keyframesfound/asr-app/releases/<id>/assets?name=Transcriber-$VERSION.dmg"
+#   GitHub stores the names dot-separated (Transcriber-1.3.0.zip) — expected.
 
 # 3. Refresh the notes with final payload sizes (see "Decide the version"), then publish
 #    only after both assets report "uploaded"

@@ -27,7 +27,7 @@ struct LessonTranscriberApp: App {
                 .frame(minWidth: 860, minHeight: 560)
         }
         .commands {
-            // App menu, right under "About Lesson Transcriber".
+            // App menu, right under "About Transcriber".
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
                     Task { await updater.checkForUpdates(manual: true) }

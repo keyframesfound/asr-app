@@ -6,6 +6,7 @@ import LessonKit
 /// Mirrors the top card of the web UI.
 struct NewLessonView: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var settings: SettingsStore
 
     @State private var audioLanguage: AudioLanguage = .auto
     @State private var outputLanguage: OutputLanguage = .zhHK
@@ -17,7 +18,7 @@ struct NewLessonView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Lesson Transcriber")
+                Text("Transcriber")
                     .font(.largeTitle.bold())
                 Text("Drop a session recording → transcription runs locally on this Mac's Neural Engine → AI summary & Google Form quiz below.")
                     .foregroundStyle(.secondary)
@@ -71,8 +72,8 @@ struct NewLessonView: View {
                         }
                     }
 
-                    if !TranscriptionEngine.modelsDownloaded(precision: .fp16) {
-                        Label("First transcription downloads the SenseVoice model (about 0.5 GB, once). "
+                    if !TranscriptionEngine.modelsDownloaded(precision: .int8) {
+                        Label("First transcription downloads the SenseVoice model (about 250 MB, once). "
                               + "Everything after that runs fully offline.", systemImage: "arrow.down.circle")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -90,6 +91,14 @@ struct NewLessonView: View {
             .frame(maxWidth: .infinity)
         }
         .background { Color.hexBackground.ignoresSafeArea() }
+        // New lessons start from the Settings defaults; the pickers above stay
+        // per-lesson and never write back.
+        .onAppear {
+            audioLanguage = settings.audioLanguage
+            outputLanguage = settings.outputLanguage
+        }
+        .onChange(of: settings.audioLanguage) { _, new in audioLanguage = new }
+        .onChange(of: settings.outputLanguage) { _, new in outputLanguage = new }
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: Self.importTypes,
                       allowsMultipleSelection: false) { result in

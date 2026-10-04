@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Builds dist/Lesson Transcriber-<version>.dmg from the notarized app, then
+# Builds dist/Transcriber-<version>.dmg from the notarized app, then
 # signs, notarizes and staples the DMG itself — recipients see "verified" on
 # the mount as well as the app.
 #
@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="Lesson Transcriber"
+APP_NAME="Transcriber"
 PROFILE="${NOTARY_PROFILE:-LESSON_NOTARY}"
 APP="dist/$APP_NAME.app"
 # Stage OUTSIDE the repo: dist/ lives in iCloud-synced Documents, where Finder

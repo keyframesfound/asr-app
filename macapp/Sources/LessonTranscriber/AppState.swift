@@ -92,9 +92,10 @@ final class AppState: ObservableObject {
 
     // MARK: - Import + transcription
 
-    /// Encoder precision as chosen in Settings (default fp16).
+    /// Encoder precision as chosen in Settings (default int8 — same accuracy,
+    /// half the bundled size).
     private var currentPrecision: EncoderPrecision {
-        EncoderPrecision(rawValue: UserDefaults.standard.string(forKey: "asr.precision") ?? "") ?? .fp16
+        EncoderPrecision(rawValue: UserDefaults.standard.string(forKey: "asr.precision") ?? "") ?? .int8
     }
 
     func importAndTranscribe(url: URL, audioLanguage: AudioLanguage, outputLanguage: OutputLanguage) {
@@ -282,7 +283,8 @@ final class AppState: ObservableObject {
             let client = OpenRouterClient(apiKey: BundledConfig.openRouterKey,
                                           model: BundledConfig.openRouterModel)
             let summary = try await client.summarize(
-                transcript: transcript, lang: lesson.outputLanguage, length: settings.summaryLength)
+                transcript: transcript, lang: lesson.outputLanguage,
+                length: settings.summaryLength, style: settings.summaryStyle)
             applySummary(lessonID: lesson.id, summary: summary)
         } catch {
             if Task.isCancelled { return } // cancelled from the loading overlay

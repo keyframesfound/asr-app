@@ -1,9 +1,9 @@
 import SwiftUI
 import LessonKit
 
-/// Settings — teachers configure nothing; the only preference is how detailed
-/// the AI summary should be (horizontal segmented control, Hex-style rows).
-/// Google sign-in / sign-out lives here too.
+/// Settings — the AI defaults (summary style and length, AI language, quiz
+/// length) and the session audio language, all overridable per lesson on
+/// import. Google sign-in / sign-out lives here too.
 struct SettingsView: View {
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var auth: GoogleAuthStore
@@ -19,16 +19,71 @@ struct SettingsView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 8)
 
-                SectionLabel("AI Summary")
+                SectionLabel("Transcription")
                 RowCard {
+                    SettingRow(
+                        title: "Session audio language",
+                        subtitle: "Default language spoken in new recordings — can still be changed per lesson when importing.",
+                        showsDivider: false)
+                    {
+                        Picker("", selection: $settings.audioLanguage) {
+                            ForEach(AudioLanguage.allCases) { lang in
+                                Text(lang.label).tag(lang)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 200)
+                    }
+                }
+
+                SectionLabel("AI")
+                RowCard {
+                    SettingRow(
+                        title: "Summary style",
+                        subtitle: settings.summaryStyle.blurb,
+                        showsDivider: true)
+                    {
+                        HexSegmentedPicker(
+                            selection: $settings.summaryStyle,
+                            options: SummaryStyle.allCases,
+                            label: \.label)
+                            .frame(width: 300)
+                    }
+
                     SettingRow(
                         title: "Summary length",
                         subtitle: settings.summaryLength.blurb,
-                        showsDivider: false)
+                        showsDivider: true)
                     {
                         HexSegmentedPicker(
                             selection: $settings.summaryLength,
                             options: SummaryLength.allCases,
+                            label: \.label)
+                            .frame(width: 300)
+                    }
+
+                    SettingRow(
+                        title: "AI language",
+                        subtitle: "Language for AI summaries and quizzes — can still be changed per lesson when importing.",
+                        showsDivider: true)
+                    {
+                        Picker("", selection: $settings.outputLanguage) {
+                            ForEach(OutputLanguage.allCases) { lang in
+                                Text(lang.label).tag(lang)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 200)
+                    }
+
+                    SettingRow(
+                        title: "Quiz length",
+                        subtitle: "Number of questions per generated quiz.",
+                        showsDivider: false)
+                    {
+                        HexSegmentedPicker(
+                            selection: quizLengthBinding,
+                            options: QuizLength.allCases,
                             label: \.label)
                             .frame(width: 300)
                     }
@@ -130,6 +185,14 @@ struct SettingsView: View {
 }
 
 extension SettingsView {
+    /// Quiz length is stored as its raw question count ("quizCount") — the
+    /// same key the New Lesson pane and the quiz button read via @AppStorage.
+    private var quizLengthBinding: Binding<QuizLength> {
+        Binding(
+            get: { QuizLength(rawValue: settings.quizCount) ?? .ten },
+            set: { settings.quizCount = $0.rawValue })
+    }
+
     /// Title of the version row: the running version, or the new one.
     private var updateTitle: String {
         if let version = updater.updateVersion {

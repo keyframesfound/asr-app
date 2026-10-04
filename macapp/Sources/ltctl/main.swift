@@ -5,7 +5,7 @@ import LessonKit
 ///   ltctl transcribe <file> [--lang auto|yue|zh|en] [--precision fp16|int8]
 ///   ltctl docx <kind transcript|summary> <file.md-or-txt> --title <t> -o out.docx
 ///   ltctl fetch-models <out-dir> [--precision fp16|int8] [--force]
-///                               (stage speech models for bundling)
+///                               (stage speech models for bundling; int8 default)
 ///   ltctl merge-test            (unit-check the chunk merging)
 let args = Array(CommandLine.arguments.dropFirst())
 let command = args.first ?? ""
@@ -27,7 +27,7 @@ case "transcribe":
     guard let path = args.dropFirst().first else { fail("usage: ltctl transcribe <file> [--lang yue]") }
     let url = URL(fileURLWithPath: path)
     let lang = AudioLanguage(rawValue: flag("--lang") ?? "auto") ?? .auto
-    let precision = EncoderPrecision(rawValue: flag("--precision") ?? "fp16") ?? .fp16
+    let precision = EncoderPrecision(rawValue: flag("--precision") ?? "int8") ?? .int8
     let engine = TranscriptionEngine()
     let started = Date()
     Task {
@@ -62,11 +62,13 @@ case "summarize":
     guard !key.isEmpty else { fail("no OpenRouter key in the environment or bundled config") }
     guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { fail("cannot read \(path)") }
     let lang = OutputLanguage(rawValue: flag("--lang") ?? "zh-HK") ?? .zhHK
+    let style = SummaryStyle(rawValue: flag("--style") ?? "lesson") ?? .lesson
     let lengthFlag = flag("--length").flatMap { SummaryLength(rawValue: $0) } ?? .standard
     let client = OpenRouterClient(apiKey: key, model: BundledConfig.openRouterModel)
     Task {
         do {
-            let summary = try await client.summarize(transcript: text, lang: lang, length: lengthFlag)
+            let summary = try await client.summarize(
+                transcript: text, lang: lang, length: lengthFlag, style: style)
             print(summary)
             semaphore.signal()
         } catch {
@@ -116,7 +118,7 @@ case "fetch-models":
     // Stage speech models for bundling (Scripts/fetch_model.sh wraps this):
     // uses the local FluidAudio cache, downloads whatever is missing.
     let outDir = URL(fileURLWithPath: args.dropFirst().first ?? "Resources/FluidAudio")
-    let stagePrecision = EncoderPrecision(rawValue: flag("--precision") ?? "fp16") ?? .fp16
+    let stagePrecision = EncoderPrecision(rawValue: flag("--precision") ?? "int8") ?? .int8
     Task {
         do {
             try await ModelStaging.stage(

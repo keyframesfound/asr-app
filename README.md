@@ -1,4 +1,4 @@
-# Lesson Transcriber
+# Transcriber
 
 Lesson recordings in → transcripts, AI summaries and Google Form quizzes out. Two variants share the same SenseVoice model and the same feature set:
 
@@ -14,7 +14,7 @@ Lesson recordings in → transcripts, AI summaries and Google Form quizzes out. 
 
 ### Daily use
 
-Open **Lesson Transcriber.app** (built into `macapp/dist/`), drop an MP3 (or WAV/M4A/AAC/OGG/FLAC/MP4) onto the window, pick the lesson-audio language (auto / Cantonese / Mandarin / English) and it transcribes **on this Mac** — nothing is uploaded. Then:
+Open **Transcriber.app** (built into `macapp/dist/`), drop an MP3 (or WAV/M4A/AAC/OGG/FLAC/MP4) onto the window, pick the lesson-audio language (auto / Cantonese / Mandarin / English) and it transcribes **on this Mac** — nothing is uploaded. Then:
 
 - **✨ AI Summary** — Overview / Key Points / Key Terms / Examples / Follow-ups, written in 繁體中文（香港）, 简体中文 or English. The **Settings** pane (sidebar, or ⌘,) chooses the length: **Brief**, **Standard** or **In-depth**.
 - **📝 Generate Google Form Quiz** — writes the questions, then creates a quiz-mode Google Form in your Drive (1 point each, correct answers marked, explanations on wrong answers). AI summary and quiz both unlock after a one-time Google sign-in in your browser; you stay signed in (log out any time in Settings). While they run, an agent-style loading overlay shows the progress with a Cancel button, and if the sign-in tab closes before you approve, **Try Again** reopens it for a second go. The quiz card shows the **student link** and an **Edit form** link.
@@ -22,7 +22,7 @@ Open **Lesson Transcriber.app** (built into `macapp/dist/`), drop an MP3 (or WAV
 - **Share** — the transcript card button (or right-click a lesson → Share…) opens the macOS share sheet with the transcript (and summary) Word files.
 - **Right-click a lesson** in the sidebar to **Rename…**, **Share…** or **Delete** it.
 
-Lessons (audio + transcript + summary + quiz) are saved under `~/Library/Application Support/LessonTranscriber/`. A first transcription downloads the SenseVoice model (~0.5 GB, once); everything after that is fully offline. Rough speed on an M2 Pro: a 1-hour lesson in ~2–4 minutes; the 26-second sample takes under a second.
+Lessons (audio + transcript + summary + quiz) are saved under `~/Library/Application Support/LessonTranscriber/`. The speech model ships inside the app (int8 encoder — nothing downloads on first run); everything after that is fully offline. Rough speed on an M2 Pro: a 1-hour lesson in ~2–4 minutes; the 26-second sample takes under a second.
 
 To bring over transcripts made with the web app:
 
@@ -34,7 +34,7 @@ cd macapp
 ### Building it
 
 ```bash
-macapp/Scripts/build_app.sh      # → macapp/dist/Lesson Transcriber.app
+macapp/Scripts/build_app.sh      # → macapp/dist/Transcriber.app
 ```
 
 Requires Xcode (full Xcode, not just Command Line Tools — SwiftUI's macros need its plugins) on an Apple Silicon Mac. The script:
@@ -48,7 +48,7 @@ Requires Xcode (full Xcode, not just Command Line Tools — SwiftUI's macros nee
 
 ### Distributing the app (DMG)
 
-`Scripts/build_app.sh` (signed) → `Scripts/notarize.sh` (Apple notarization + staple) → `Scripts/make_dmg.sh` → `dist/Lesson Transcriber-<version>.dmg`. The DMG has a drag-to-Applications layout and is itself signed, notarized and stapled, so it opens on any **Apple Silicon Mac (macOS 14+)** with zero Gatekeeper warnings.
+`Scripts/build_app.sh` (signed) → `Scripts/notarize.sh` (Apple notarization + staple) → `Scripts/make_dmg.sh` → `dist/Transcriber-<version>.dmg`. The DMG has a drag-to-Applications layout and is itself signed, notarized and stapled, so it opens on any **Apple Silicon Mac (macOS 14+)** with zero Gatekeeper warnings.
 
 One-time setup (paid Apple Developer Program, ~10 min):
 
@@ -63,10 +63,10 @@ Then build the DMG:
 ```bash
 macapp/Scripts/build_app.sh    # Developer ID signed, hardened runtime
 macapp/Scripts/notarize.sh     # Apple notarization + staple (~2–10 min)
-macapp/Scripts/make_dmg.sh     # → macapp/dist/Lesson Transcriber-<version>.dmg (also notarized)
+macapp/Scripts/make_dmg.sh     # → macapp/dist/Transcriber-<version>.dmg (also notarized)
 ```
 
-`SKIP_SIGN=1` (ad-hoc dev build), `SKIP_NOTARIZE=1` / `FORCE_DMG=1` (skip the Apple submission) for local testing. Recipients: first transcription downloads the SenseVoice model (~0.5 GB, once); OGG input needs `brew install ffmpeg`. They can verify with `spctl -a -vv "/Applications/Lesson Transcriber.app"` → `source=Notarized Developer ID`.
+`SKIP_SIGN=1` (ad-hoc dev build), `SKIP_NOTARIZE=1` / `FORCE_DMG=1` (skip the Apple submission) for local testing. Recipients: first transcription downloads the SenseVoice model; OGG input needs `brew install ffmpeg`. They can verify with `spctl -a -vv "/Applications/Transcriber.app"` → `source=Notarized Developer ID`.
 
 > The baked API keys travel inside the DMG — anyone holding it can extract the OpenRouter key and Google client secret from `Contents/Resources/config.plist`. Share only with people you trust, keep a spending cap on the OpenRouter key, and rotate both if a copy ever leaks.
 
@@ -81,7 +81,7 @@ gh auth login                       # once
 macapp/Scripts/release.sh 1.1.0 "Faster transcription, fixed OGG import."
 ```
 
-That builds + codesigns the app, zips it as `dist/Lesson Transcriber-1.1.0.zip` and publishes GitHub release `v1.1.0` with the zip attached — every installed copy offers it within 12 hours. Publishing by hand works too: create the release on GitHub, tag it `v1.1.0`, and attach the zip from `Scripts/build_app.sh VERSION=1.1.0` (the zip must contain the `.app` at the top level, which is how the script builds it).
+That builds + codesigns the app, zips it as `dist/Transcriber-<version>.zip` and publishes GitHub release `v1.1.0` with the zip attached — every installed copy offers it within 12 hours. Publishing by hand works too: create the release on GitHub, tag it `v1.1.0`, and attach the zip from `Scripts/build_app.sh VERSION=x.y.z` (the zip must contain the `.app` at the top level, which is how the script builds it).
 
 Rules the updater relies on:
 

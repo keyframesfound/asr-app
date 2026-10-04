@@ -29,9 +29,22 @@ public struct OpenRouterClient: Sendable {
         }
     }
 
+    /// The AI Summary button: a lesson summary or meeting minutes, per the
+    /// Settings default, at the chosen detail level.
     public func summarize(transcript: String, lang: OutputLanguage,
-                          length: SummaryLength = .standard) async throws -> String {
+                          length: SummaryLength = .standard,
+                          style: SummaryStyle = .lesson) async throws -> String {
         let langRule = Self.languageRule(lang)
+        switch style {
+        case .lesson:
+            return try await summarizeLesson(transcript, langRule: langRule, length: length)
+        case .minutes:
+            return try await summarizeMinutes(transcript, langRule: langRule, length: length)
+        }
+    }
+
+    private func summarizeLesson(_ transcript: String, langRule: String,
+                                 length: SummaryLength) async throws -> String {
         let intro = "You are an experienced teaching assistant who summarises session transcripts "
             + "for teachers. Write everything in \(langRule)\n"
         let body: String
@@ -61,6 +74,47 @@ public struct OpenRouterClient: Sendable {
                 + "## Examples — describe each example or worked problem and what it demonstrates\n"
                 + "## Follow-ups — all homework, reminders or next steps, including any deadlines mentioned\n"
                 + "Where the transcript shows a calculation or process, lay out its steps. "
+                + "Use only facts from the transcript; never invent content."
+        }
+        return try await chat(
+            messages: [.init(role: "system", content: intro + body),
+                       .init(role: "user", content: "Session transcript:\n\n\(transcript)")],
+            maxTokens: 4000
+        )
+    }
+
+    /// Meeting minutes: decisions and action items instead of teaching points.
+    private func summarizeMinutes(_ transcript: String, langRule: String,
+                                  length: SummaryLength) async throws -> String {
+        let intro = "You are a professional secretary who writes minutes from session transcripts. "
+            + "Write everything in \(langRule)\n"
+        let body: String
+        switch length {
+        case .brief:
+            body = "Produce a concise Markdown meeting minute with these sections:\n"
+                + "## Overview — 1-2 sentences on what the meeting was about and its outcome\n"
+                + "## Decisions — the key decisions made, as bullets (omit the section if none)\n"
+                + "## Action Items — task — owner — deadline, one line each (omit the section if none)\n"
+                + "Keep the whole minute under 150 words. "
+                + "Use only facts from the transcript; never invent content."
+        case .standard:
+            body = "Produce a Markdown meeting minute with exactly these sections:\n"
+                + "## Overview — 2-3 sentences on the meeting's purpose and outcome\n"
+                + "## Topics Discussed — the main points raised, as bullets\n"
+                + "## Decisions — what was agreed, as bullets (omit the section if none)\n"
+                + "## Action Items — task, owner and deadline where mentioned "
+                + "(omit the section if none)\n"
+                + "Name participants only if the transcript identifies them. "
+                + "Use only facts from the transcript; never invent content."
+        case .inDepth:
+            body = "Produce a thorough, detailed Markdown meeting minute with these sections:\n"
+                + "## Overview — 3-5 sentences on the meeting's purpose, scope and outcome\n"
+                + "## Topics Discussed — each topic with a short account of what was said\n"
+                + "## Decisions — each decision with its rationale, as bullets\n"
+                + "## Action Items — every task mentioned, with owner and deadline where stated\n"
+                + "## Open Questions — items left unresolved or deferred (omit the section if none)\n"
+                + "Where the transcript shows numbers, budgets or schedules, record them exactly. "
+                + "Name participants only if the transcript identifies them. "
                 + "Use only facts from the transcript; never invent content."
         }
         return try await chat(

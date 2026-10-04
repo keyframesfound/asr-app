@@ -62,8 +62,8 @@ public enum OutputLanguage: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// SenseVoice encoder precision: fp16 (default) or int8 (~half the download,
-/// accuracy-neutral) — both run on the Apple Neural Engine.
+/// SenseVoice encoder precision: int8 (default — ~half the download, same
+/// accuracy) or fp16 — both run on the Apple Neural Engine.
 public enum EncoderPrecision: String, CaseIterable, Identifiable {
     case fp16
     case int8
@@ -71,7 +71,7 @@ public enum EncoderPrecision: String, CaseIterable, Identifiable {
     public var id: String { rawValue }
 
     public var label: String {
-        self == .fp16 ? "FP16 (default)" : "INT8 (smaller download)"
+        self == .fp16 ? "FP16" : "INT8 (default)"
     }
 }
 
@@ -98,6 +98,37 @@ public enum SummaryLength: String, Codable, CaseIterable, Identifiable {
         case .inDepth: return "Fuller notes with more detail in every section."
         }
     }
+}
+
+/// What the AI Summary button produces (chosen in Settings): a lesson summary
+/// or meeting minutes.
+public enum SummaryStyle: String, Codable, CaseIterable, Identifiable {
+    case lesson
+    case minutes
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        self == .lesson ? "Lesson summary" : "Meeting minutes"
+    }
+
+    public var blurb: String {
+        self == .lesson
+            ? "Overview, key points, terms and follow-ups — tuned for classes."
+            : "Topics discussed, decisions and action items — tuned for meetings."
+    }
+}
+
+/// Quiz size choices for the segmented control. The raw value is the number of
+/// questions and is what the "quizCount" default stores.
+public enum QuizLength: Int, Codable, CaseIterable, Identifiable {
+    case five = 5
+    case ten = 10
+    case fifteen = 15
+
+    public var id: Int { rawValue }
+
+    public var label: String { "\(rawValue) questions" }
 }
 
 /// One generated multiple-choice question (validated shape from the LLM).

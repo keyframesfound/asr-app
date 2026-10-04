@@ -1,5 +1,9 @@
 #!/bin/zsh
-# Builds the release binaries and bundles "Lesson Transcriber.app" into dist/.
+# Builds the release binaries and bundles "Transcriber.app" into dist/.
+# (v1.3.0 renamed the app from "Lesson Transcriber"; the bundle ID and the
+# Application Support / keychain names are unchanged, so lessons, settings and
+# the Google sign-in survive the rename, and the in-app updater migrates the
+# installed bundle to the new name.)
 #
 # Requires either full Xcode (SwiftUI macro plugins) or Command Line Tools.
 # Xcode is preferred; DEVELOPER_DIR is set per-invocation so the system
@@ -7,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="Lesson Transcriber"
+APP_NAME="Transcriber"
 BUNDLE_ID="com.asrweb.lesson-transcriber"
 VERSION="${VERSION:-1.0.0}"
 BUILD="${BUILD:-1}"

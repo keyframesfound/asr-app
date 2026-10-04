@@ -144,7 +144,7 @@ public final class AppUpdater: ObservableObject {
     private func fetchLatestRelease() async throws -> AppRelease? {
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("LessonTranscriber/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("Transcriber/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 15
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode == 404 { return nil }
@@ -157,7 +157,7 @@ public final class AppUpdater: ObservableObject {
         // fall back to any zip. A .dmg can't be swapped in automatically — the
         // release page opens instead.
         let appKey = Self.normalizeKey(
-            (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "LessonTranscriber")
+            (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "Transcriber")
         let zips = decoded.assets.filter { $0.name.lowercased().hasSuffix(".zip") }
         let asset = zips.first { Self.normalizeKey($0.name).contains(appKey) } ?? zips.first
 
@@ -345,9 +345,12 @@ public final class AppUpdater: ObservableObject {
         let scriptURL = FileManager.default.temporaryDirectory.appendingPathComponent("install-update.sh")
         let script = """
         #!/bin/bash
-        # Swaps in the Lesson Transcriber update once the running app has quit.
+        # Swaps in the Transcriber update once the running app has quit. Installs
+        # under the staged bundle's own name, so an app rename ships cleanly —
+        # the old-named bundle is removed after the new one is in place.
         TARGET='\(target.path)'
         NEW='\(staged.path)'
+        FINAL="$(dirname "$TARGET")/$(basename "$NEW")"
         LOG='\(log.path)'
         {
           echo "[$(date)] update: installing from $NEW"
@@ -359,10 +362,14 @@ public final class AppUpdater: ObservableObject {
             echo "error: the app was still running after 60s"
             exit 1
           fi
-          rm -rf "$TARGET" || exit 1
-          mv "$NEW" "$TARGET" || exit 1
+          rm -rf "$FINAL" || exit 1
+          mv "$NEW" "$FINAL" || exit 1
+          if [ "$FINAL" != "$TARGET" ]; then
+            rm -rf "$TARGET"
+            echo "[$(date)] update: removed the old bundle $TARGET"
+          fi
           echo "[$(date)] replaced, relaunching"
-          open "$TARGET"
+          open "$FINAL"
         } >> "$LOG" 2>&1
         """
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
@@ -409,7 +416,7 @@ public final class AppUpdater: ObservableObject {
         return false
     }
 
-    /// "Lesson Transcriber-1.2.0.zip" → "lessontranscriber120" (asset matching).
+    /// "Transcriber-1.3.0.zip" → "transcriber130" (asset matching).
     nonisolated private static func normalizeKey(_ string: String) -> String {
         string.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
     }
