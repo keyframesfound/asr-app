@@ -13,7 +13,7 @@ public enum BundledConfig {
     public static var openRouterKey: String { values["OPENROUTER_API_KEY"] ?? "" }
     public static var openRouterModel: String {
         let model = values["OPENROUTER_MODEL"] ?? ""
-        return model.isEmpty ? "deepseek/deepseek-chat" : model
+        return model.isEmpty ? "deepseek/deepseek-v4-pro" : model
     }
     public static var googleClientID: String { values["GOOGLE_CLIENT_ID"] ?? "" }
     public static var googleClientSecret: String { values["GOOGLE_CLIENT_SECRET"] ?? "" }
